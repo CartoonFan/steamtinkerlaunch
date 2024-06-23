@@ -7,7 +7,7 @@
 PREFIX="/usr"
 PROGNAME="SteamTinkerLaunch"
 NICEPROGNAME="Steam Tinker Launch"
-PROGVERS="v14.0.20240415-1"
+PROGVERS="v14.0.20240624-1"
 PROGCMD="${0##*/}"
 PROGINTERNALPROTNAME="Proton-stl"
 SHOSTL="stl"
@@ -159,7 +159,11 @@ FIXGAMESCOPE=0
 SMALLDESK=0
 VTX_DOTNET_ROOT="c:\\Program Files\\dotnet\\\\"
 STLQUIET=0
-SLRAID="1070560"  # Hardcoded SLR AppID for native games -- See `setSLRReap`
+
+# Hardcoded SLR AppID for native games -- See `setSLRReap`
+# TODO refactor to be array for native AIDs? Some games (CS2) can use SLR 3.0
+# We should allow the user to choose whether to use SLE 1.0 or 3.0 for native games
+SLRAID="1070560"
 DEFWINEDPI="96"
 WINEDPIVALUES="${DEFWINEDPI}!120!150!240"
 SGDBTIMEOUT="15"
@@ -2271,8 +2275,10 @@ function setGameVars {
 	fi
 
 	if grep -q "$SLR" <<< "$@"; then
+		writelog "INFO" "${FUNCNAME[0]} - Found SLR is launch option"
 		HAVESLR=1
 	else
+		writelog "INFO" "${FUNCNAME[0]} - No SLR is in launch option"
 		HAVESLR=0
 	fi
 
@@ -2379,6 +2385,12 @@ function setGameVars {
 		done <<< "$(printf "%s\n" "${WIPCGCMD[@]}")"
 	fi
 
+	# SLRCT = Steam Linux Runtime from Compatibility Tool
+	# Refers to instances where the SLR comes in the launch command for a game
+	# This can happen if you launch a game with SLR 1.0 or 3.0 selected as a compatibility tool, as Steam
+	# will give the launch command wrapped with the SLR.
+	#
+	# See setSLRReap for implementation on how we use this
 	if grep -q "$SLR" <<< "${WIPDGCMD[@]}"; then
 		HAVESLRCT=1
 	else
@@ -2752,7 +2764,14 @@ function getProtonInternalName {
 		VPP="$1"  # Valve Proton Path
 
 		writelog "INFO" "${FUNCNAME[0]} - Checking if Proton version at '$VPP' is a Valve Proton version"
-		if [ -d "$VPP/dist" ] && [ ! -f "$VPP/$CTVDF" ]; then
+		# We used to check only for 'dist', but Proton 9.0 onwards (including Experimental & Hotfix) use 'files' instead of 'dist'
+		# The only assumption we can make for a Valve Proton version now is if it's missing the compatibilitytools.vdf file, since
+		# They Valve Proton can have either 'files' or 'dist'
+		#
+		# The main thing we *need* to check for is "$VPP/$CTVDF" (compatibilitytools.vdf in the compat tool folder), as all
+		# third-party compat tools should have this and Valve Proton versions do not (their info is stored in appinfo.vdf internal to Steam)
+		# The checks for 'files' and 'dist' are just for sanity to make sure this is a valid Proton version altogether
+		if [[ ! -f "$VPP/$CTVDF" && ( -d "$VPP/dist" || -d "$VPP/files" ) ]]; then
 			writelog "INFO" "${FUNCNAME[0]} - Looks like we have a Valve Proton release here"
 			return 0
 		else
@@ -3115,6 +3134,7 @@ function setDefaultCfgValues {
 		if [ -z "$DISABLEVORTEXAUTOUPDATE" ]			; then	DISABLEVORTEXAUTOUPDATE="0"; fi
 		if [ -z "$USEVORTEXCUSTOMVER" ]					; then	USEVORTEXCUSTOMVER="0"; fi
 		if [ -z "$VORTEXCUSTOMVER" ]					; then	VORTEXCUSTOMVER="$NON"; fi
+		if [ -z "$VORTEXDEVICESCALEFACTOR" ]			; then  VORTEXDEVICESCALEFACTOR="1"; fi
 		if [ -z "$DISABLE_AUTOSTAGES" ]					; then	DISABLE_AUTOSTAGES="0"; fi
 		if [ -z "$NOSTEAMSTLDEF" ]						; then	NOSTEAMSTLDEF="0"; fi
 		if [ -z "$SGDBAPIKEY" ]							; then	SGDBAPIKEY="$NON"; fi
@@ -3175,6 +3195,7 @@ function setDefaultCfgValues {
 		if [ -z "$KEEPSTLOPEN" ]						; then	KEEPSTLOPEN="0"; fi
 		if [ -z "$USESLR" ]								; then	USESLR="1"; fi
 		if [ -z "$FORCESLR" ]							; then	FORCESLR="0"; fi
+		if [ -z "$IGNORECOMPATSLR" ]					; then	IGNORECOMPATSLR="0"; fi
 		if [ -z "$USEREAP" ]							; then	USEREAP="1"; fi
 		if [ -z "$FORCEREAP" ]							; then	FORCEREAP="0"; fi
 		if [ -z "$USEPROTON" ]							; then	USEPROTON="$(getDefaultProton)"; fi
@@ -3189,6 +3210,7 @@ function setDefaultCfgValues {
 		if [ -z "$ONLY_CUSTOMCMD" ]						; then	ONLY_CUSTOMCMD="0";	fi
 		if [ -z "$FORK_CUSTOMCMD" ]						; then	FORK_CUSTOMCMD="0";	fi
 		if [ -z "$EXTPROGS_CUSTOMCMD" ]					; then  EXTPROGS_CUSTOMCMD="0"; fi
+		if [ -z "$CUSTOMCMD_USESLR" ]					; then  CUSTOMCMD_USESLR="1"; fi
 		if [ -z "$CUSTOMCMDFORCEWIN" ]					; then  CUSTOMCMDFORCEWIN="0"; fi
 		if [ -z "$WAITFORCUSTOMCMD" ]					; then	WAITFORCUSTOMCMD="0"; fi
 		if [ -z "$INJECT_CUSTOMCMD" ]					; then	INJECT_CUSTOMCMD="0"; fi
@@ -3342,6 +3364,7 @@ function setDefaultCfgValues {
 		if [ -z "$SORTGARGS" ]							; then	SORTGARGS="0"; fi
 		if [ -z "$MO2MODE" ]							; then	MO2MODE="disabled"; fi
 		if [ -z "$WAITMO2" ]							; then	WAITMO2="2"; fi
+		if [ -z "$MO2SILENTMODEEXEOVERRIDE" ]			; then  MO2SILENTMODEEXEOVERRIDE="$NON"; fi
 		if [ -z "$USESPECIALK" ]						; then	USESPECIALK="0"; fi
 		if [ -z "$SPEKDLLNAME" ]						; then  SPEKDLLNAME="$AUTO"; fi
 		if [ -z "$USERESHSPEKPLUGIN" ]					; then  USERESHSPEKPLUGIN="1"; fi
@@ -3627,6 +3650,8 @@ function saveCfg {
 			echo "USEVORTEXCUSTOMVER=\"$USEVORTEXCUSTOMVER\""
 			echo "## $DESC_VORTEXCUSTOMVER"
 			echo "VORTEXCUSTOMVER=\"$VORTEXCUSTOMVER\""
+			echo "## $DESC_VORTEXDEVICESCALEFACTOR"
+			echo "VORTEXDEVICESCALEFACTOR=\"$VORTEXDEVICESCALEFACTOR\""
 			echo "## $(strFix "$DESC_DISABLE_AUTOSTAGES" "$PROGNAME")"
 			echo "DISABLE_AUTOSTAGES=\"$DISABLE_AUTOSTAGES\""
 			echo "## $DESC_NOSTEAMSTLDEF"
@@ -3753,6 +3778,8 @@ function saveCfg {
 			echo "USESLR=\"$USESLR\""
 			echo "## $DESC_FORCESLR"
 			echo "FORCESLR=\"$FORCESLR\""
+			echo "## $DESC_IGNORECOMPATSLR"
+			echo "IGNORECOMPATSLR=\"$IGNORECOMPATSLR\""
 			echo "## $DESC_USEREAP"
 			echo "USEREAP=\"$USEREAP\""
 			echo "## $DESC_FORCEREAP"
@@ -3781,6 +3808,8 @@ function saveCfg {
 			echo "FORK_CUSTOMCMD=\"$FORK_CUSTOMCMD\""
 			echo "## $DESC_EXTPROGS_CUSTOMCMD"
 			echo "EXTPROGS_CUSTOMCMD=\"$EXTPROGS_CUSTOMCMD\""
+			echo "## $DESC_CUSTOMCMD_USESLR"
+			echo "CUSTOMCMD_USESLR=\"$CUSTOMCMD_USESLR\""
 			echo "## $DESC_CUSTOMCMD_FORCEWIN"
 			echo "CUSTOMCMDFORCEWIN=\"$CUSTOMCMDFORCEWIN\""
 			echo "## $DESC_WAITFORCUSTOMCMD"
@@ -4051,6 +4080,8 @@ function saveCfg {
 			echo "SORTGARGS=\"$SORTGARGS\""
 			echo "## $DESC_WAITMO2"
 			echo "WAITMO2=\"$WAITMO2\""
+			echo "## $DESC_MO2SILENTMODEEXEOVERRIDE"
+			echo "MO2SILENTMODEDESC_MO2SILENTMODEEXEOVERRIDE=\"$MO2SILENTMODEDESC_MO2SILENTMODEEXEOVERRIDE\""
 			echo "## $DESC_MO2MODE"
 			echo "MO2MODE=\"$MO2MODE\""
 			echo "## $DESC_USESPECIALK"
@@ -5653,6 +5684,7 @@ function AllSettingsEntriesDummyFunction {
 --field="     $GUI_CUSTOMCMD_ARGS!$DESC_CUSTOMCMD_ARGS ('CUSTOMCMD_ARGS')" "$( printf "%s" "${CUSTOMCMD_ARGS/#-/ -}" )" `#CAT_Misc` `#MENU_GAME` \
 --field="     $GUI_FORK_CUSTOMCMD!$DESC_FORK_CUSTOMCMD ('FORK_CUSTOMCMD')":CHK "${FORK_CUSTOMCMD/#-/ -}" `#CAT_Misc` `#SUB_Checkbox` `#MENU_GAME` \
 --field="     $GUI_EXTPROGS_CUSTOMCMD!$DESC_EXTPROGS_CUSTOMCMD ('EXTPROGS_CUSTOMCMD')":CHK "${EXTPROGS_CUSTOMCMD/#-/ -}" `#CAT_Misc` `#SUB_Checkbox` `#MENU_GAME` \
+--field="     $GUI_CUSTOMCMD_USESLR!$DESC_CUSTOMCMD_USESLR ('CUSTOMCMD_USESLR')":CHK "${CUSTOMCMD_USESLR/#-/ -}" `#CAT_Misc` `#SUB_Checkbox` `#MENU_GAME` \
 --field="     $GUI_ONLY_CUSTOMCMD!$DESC_ONLY_CUSTOMCMD ('ONLY_CUSTOMCMD')":CHK "${ONLY_CUSTOMCMD/#-/ -}" `#CAT_Misc` `#SUB_Checkbox` `#MENU_GAME` \
 --field="     $GUI_CUSTOMCMD_FORCEWIN!$DESC_CUSTOMCMD_FORCEWIN ('CUSTOMCMDFORCEWIN')":CHK "${CUSTOMCMDFORCEWIN/#-/ -}" `#CAT_Misc` `#SUB_Checkbox` `#MENU_GAME` \
 --field="     $GUI_WAITFORCUSTOMCMD!$DESC_WAITFORCUSTOMCMD ('WAITFORCUSTOMCMD')":NUM "${WAITFORCUSTOMCMD/#-/ -}" `#CAT_Misc` `#SUB_Checkbox` `#MENU_GAME` \
@@ -5695,6 +5727,7 @@ function AllSettingsEntriesDummyFunction {
 --field="     $GUI_USEPROTON!$DESC_USEPROTON ('USEPROTON')":CB "$(cleanDropDown  "${USEPROTON/#-/ -}" "$PROTYADLIST")" `#CAT_Proton` `#MENU_GAME` \
 --field="     $GUI_USESLR!$DESC_USESLR ('USESLR')":CHK "${USESLR/#-/ -}" `#CAT_Proton` `#SUB_Checkbox` `#MENU_GAME` \
 --field="     $GUI_FORCESLR!$DESC_FORCESLR ('FORCESLR')":CHK "${FORCESLR/#-/ -}" `#CAT_Proton` `#SUB_Checkbox` `#MENU_GAME` \
+--field="     $GUI_IGNORECOMPATSLR!$DESC_IGNORECOMPATSLR ('IGNORECOMPATSLR')":CHK "${IGNORECOMPATSLR/#-/ -}" `#CAT_Proton` `#SUB_Checkbox` `#MENU_GAME` \
 --field="     $GUI_USEREAP!$DESC_USEREAP ('USEREAP')":CHK "${USEREAP/#-/ -}" `#CAT_Proton` `#SUB_Checkbox` `#MENU_GAME` \
 --field="     $GUI_FORCEREAP!$DESC_FORCEREAP ('FORCEREAP')":CHK "${FORCEREAP/#-/ -}" `#CAT_Proton` `#SUB_Checkbox` `#MENU_GAME` \
 --field="     $GUI_AUTOLASTPROTON!$DESC_AUTOLASTPROTON ('AUTOLASTPROTON')":CHK "${AUTOLASTPROTON/#-/ -}" `#CAT_Proton` `#SUB_Checkbox` `#MENU_GLOBAL` \
@@ -5892,6 +5925,7 @@ function AllSettingsEntriesDummyFunction {
 --field="     $GUI_USEOPENVRFSR!$DESC_USEOPENVRFSR ('USEOPENVRFSR')":CHK "${USEOPENVRFSR/#-/ -}" `#CAT_VR` `#SUB_Checkbox` `#MENU_GAME` \
 --field="$(spanFont "$GUI_OPTSVORTEX" "H")":LBL "SKIP" `#CAT_Vortex` `#HEAD_Vortex` `#MENU_GAME` `#MENU_GLOBAL` \
 --field="     $GUI_USEVORTEX!$DESC_USEVORTEX ('USEVORTEX')":CHK "${USEVORTEX/#-/ -}" `#CAT_Vortex` `#MENU_GAME` \
+--field="     $GUI_VORTEXDEVICESCALEFACTOR!$DESC_VORTEXDEVICESCALEFACTOR ('VORTEXDEVICESCALEFACTOR')" "${VORTEXDEVICESCALEFACTOR/#-/ -}" `#CAT_Vortex` `#MENU_GLOBAL` \
 --field="     $GUI_WAITVORTEX!$DESC_WAITVORTEX ('WAITVORTEX')":NUM "${WAITVORTEX/#-/ -}" `#CAT_Vortex` `#MENU_GAME` \
 --field="     $GUI_RUN_VORTEX_WINETRICKS!$DESC_RUN_VORTEX_WINETRICKS ('RUN_VORTEX_WINETRICKS')":CHK "${RUN_VORTEX_WINETRICKS/#-/ -}" `#CAT_Vortex` `#MENU_GAME` \
 --field="     $GUI_RUN_VORTEX_WINECFG!$DESC_RUN_VORTEX_WINECFG ('RUN_VORTEX_WINECFG')":CHK "${RUN_VORTEX_WINECFG/#-/ -}" `#CAT_Vortex` `#MENU_GAME` \
@@ -5937,8 +5971,9 @@ function AllSettingsEntriesDummyFunction {
 --field="     $GUI_USEMO2PROTON!$DESC_USEMO2PROTON ('USEMO2PROTON')":CB "$(cleanDropDown "${USEMO2PROTON/#-/ -}" "$PROTYADLIST")" `#CAT_MO2` `#MENU_GLOBAL` \
 --field="     $GUI_USEMO2CUSTOMINSTALLER!$DESC_USEMO2CUSTOMINSTALLER ('USEMO2CUSTOMINSTALLER')":CHK "${USEMO2CUSTOMINSTALLER/#- -}" `#CAT_MO2` `#SUB_Checkbox` `#MENU_GLOBAL` \
 --field="     $GUI_MO2CUSTOMINSTALLER!$DESC_MO2CUSTOMINSTALLER ('MO2CUSTOMINSTALLER')":FL "${MO2CUSTOMINSTALLER/#-/ -}" `#CAT_MO2` `#SUB_Directories` `#MENU_GLOBAL` \
---field="     $GUI_MO2MODE!$DESC_MO2MODE ('MO2MODE')":CB "$(cleanDropDown "${MO2MODE/#-/ -}" "disabled!gui")" `#CAT_MO2` `#MENU_GAME` \
+--field="     $GUI_MO2MODE!$DESC_MO2MODE ('MO2MODE')":CB "$(cleanDropDown "${MO2MODE/#-/ -}" "disabled!gui!silent")" `#CAT_MO2` `#MENU_GAME` \
 --field="     $GUI_WAITMO2!$DESC_WAITMO2 ('WAITMO2')":NUM "${WAITMO2/#-/ -}" `#CAT_MO2` `#MENU_GAME` \
+--field="     $GUI_MO2SILENTMODEEXEOVERRIDE!$DESC_MO2SILENTMODEEXEOVERRIDE ('MO2SILENTMODEEXEOVERRIDE')":CBE "$(cleanDropDown "${MO2SILENTMODEEXEOVERRIDE/#-/ -}" "$MO2SILENTMODEEXEPROFILES" )" `#CAT_MO2` `#MENU_GAME` \
 #ENDSETENTRIES
 }
 
@@ -6334,6 +6369,7 @@ function MainMenu {
 	writelog "INFO" "${FUNCNAME[0]} - Preparing to load Main Menu"
 
 	createDLReShadeList
+	createMO2SilentModeExeProfilesList
 	prepareMenu "$@"
 
 	setShowPic
@@ -7055,6 +7091,7 @@ function extProtonRun {
 	PROGARGS="$3"
 	EXTPROGRAMARGS="$4"  # e.g. args like GameScope/GameMode taken from `buildCustomCmdLaunch` for ONLY_CUSTOMCMD
 	EXTWINERUN=0
+	EXTPROTUSESLR="${5:-0}"  # Should extProtonRun fetch and use SLR (default to 0 -- turned off)
 
 	if [ "$USEWINE" -eq 1 ] && [[ ! "$WINEVERSION" =~ ${DUMMYBIN}$ ]] && [ "$WINEVERSION" != "$NON" ]; then
 		EXTWINERUN=1
@@ -7080,7 +7117,7 @@ function extProtonRun {
 			mapfile -d " " -t -O "${#TMP_RUNPROGARGS[@]}" TMP_RUNPROGARGS < <( printf "%q" "$PROGARGS" )
 
 			# Basically check for and join paths that contain spaces because above mapfile will strip them
-			# TODO: This does NOT work with paths that use forward slashes 
+			# TODO: This does NOT work with paths that use forward slashes
 			for i in "${!TMP_RUNPROGARGS[@]}"; do
 				# Remove trailing backslash, i.e. turn `--launch\` into `--launch`
 				TMP_RUNPROGARGS[i]="${TMP_RUNPROGARGS[i]%\\}"
@@ -7095,7 +7132,7 @@ function extProtonRun {
 				if [[ $LASTRUNPROGARG = *"\\" ]]; then
 					# Remove 'i-1' (previous element), because 'i' (current element) will contain 'i-1'
 					unset "TMP_RUNPROGARGS[i-1]"
-					TMP_RUNPROGARGS[i]="${LASTRUNPROGARG} ${TMP_RUNPROGARGS[i]}"        
+					TMP_RUNPROGARGS[i]="${LASTRUNPROGARG} ${TMP_RUNPROGARGS[i]}"
 				fi
 				LASTRUNPROGARG="${TMP_RUNPROGARGS[i]}"
 			done
@@ -7116,8 +7153,46 @@ function extProtonRun {
 			mapfile -d " " -t -O "${#RUNEXTPROGRAMARGS[@]}" RUNEXTPROGRAMARGS < <(printf '%s' "$EXTPROGRAMARGS")
 		fi
 
+		# Have to set SLR in extProtonRun because we can't pass the array to the function
+		# Hopefully unsetting is safe and doesn't mean places that need the SLR will lose it from this 'unset'
+		if [ "$EXTPROTUSESLR" -eq 1 ]; then
+			writelog "INFO" "${FUNCNAME[0]} - EXTPROTUSESLR is '$EXTPROTUSESLR' -- Attempting to find and use SLR with extProtonRun"
+			
+			unset "${SLRCMD[@]}"
+			setSLRReap
+		fi
+
+		# append SLR to beginning of RUNEXTPROGRAMARGS, if SLR is defined
+		# TODO this is the exact same logic as in launchCustomProg (except the log messages are slightly different), is there any way to share it?
+		if [ -n "${SLRCMD[*]}" ]; then
+			writelog "INFO" "${FUNCNAME[0]} - Gotten Steam Linux Runtime for Proton launch, using RUNEXTPROGRAMARGS array to contain it and add it to launch command"
+
+			OLDRUNEXTPROGRAMARGS=( "${RUNEXTPROGRAMARGS[@]}" )
+
+			unset "${RUNEXTPROGRAMARGS[@]}"
+			RUNEXTPROGRAMARGS=( "${SLRCMD[@]}" )
+
+			# OLDRUNEXTPROGRAMARGS should only contain one item, the passed args for the custom command
+			# if the first item here is not empty, assume we have to include the old pass args in the new array
+			#
+			# if blank, it means OLDRUNEXTPROGRAMARGS was most likely empty (or started with a blank element, which would cause a crash anyway)
+			# so we can just create RUNEXTPROGRAMARGS with the SLR as the only element
+			if [ -n "${OLDRUNEXTPROGRAMARGS[0]}" ]; then
+				writelog "INFO" "${FUNCNAME[0]} - Seems like some arguments were given to the custom command, including them alongside the Steam Linux Runtime arguments"
+				RUNEXTPROGRAMARGS+=( "${OLDRUNEXTPROGRAMARGS[@]}" )
+			fi
+		elif [ -z "${SLRCMD[*]}" ] && [ "$CUSTOMCMD_USESLR" -eq 1 ]; then
+			writelog "WARN" "${FUNCNAME[0]} - Attempted to fetch Steam Linux Runtime but failed to find one!"
+		fi
+		unset "${SLRCMD[@]}"
+
 		# TODO pass "$EXTPROGRAMARGS" to programs running with Wine as well(?)
 		# TODO refactor a bit to be a little cleaner if possible
+		# TODO it should be possible to pass PROTON_LOG to these Proton commands, however this also requries SteamGameId to be set -- This is not defined outside of Steam AND inside of Steam it would conflict with an actual Game ID if used
+		#      if we want to use PROTON_LOG we need the ability to pass in PROTON_LOG=? and a custom SteamGameId that is only set for these program runs
+		#      i.e. a default SteamGameId could be `extProtonRun`, but launchCustomProg could pass `customcommand`.
+		#
+		#      This would be tricky to add, but would be nice to have!
 		CUSTPROGNAME="$( basename "$PROGRAM" )"
 		if [ "$MODE" == "F" ]; then  # Forked Proton/Wine 'normal' custom program
 			if [ -n "${RUNPROGARGS[0]}" ]; then
@@ -7200,7 +7275,8 @@ function extProtonRun {
 				else
 					notiShow "$( strFix "$NOTY_CUSTPROG_REG" "$CUSTPROGNAME" )"
 					if [ -n "${RUNEXTPROGRAMARGS[0]}" ]; then
-						"${RUNEXTPROGRAMARGS[@]}" "$RUNPROTON" run "$PROGRAM" 2>&1 | tee "$STLSHM/${FUNCNAME[0]}.log"
+						writelog "INFO" "${FUNCNAME[0]} - \"${RUNEXTPROGRAMARGS[*]}\" \"$RUNPROTON\" run \"$PROGRAM\""
+						"${RUNEXTPROGRAMARGS[@]}" "$RUNPROTON" waitforexitandrun "$PROGRAM" 2>&1 | tee "$STLSHM/${FUNCNAME[0]}.log"
 					else
 						"$RUNPROTON" run "$PROGRAM" 2>&1 | tee "$STLSHM/${FUNCNAME[0]}.log"
 					fi
@@ -7647,75 +7723,79 @@ function getGameWinNameFromXid {
 function getGameWindowPID {
 	if [ "$MO2MODE" == "gui" ]; then
 		writelog "SKIP" "${FUNCNAME[0]} - Skipping check for window pid, because MO2MODE is '$MO2MODE'"
-	else
-		if [ -n "$GAMEWINPID" ]; then
-			writelog "SKIP" "${FUNCNAME[0]} - Already have the GAMEWINPID '$GAMEWINPID'"
-			echo "$GAMEWINPID"
+	fi
+
+	if [ -n "$GAMEWINPID" ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - Already have the GAMEWINPID '$GAMEWINPID'"
+		echo "$GAMEWINPID"
+
+		return
+	fi
+	
+	MAXWAIT=20
+	COUNTER=0
+	TESTPID="$NON"
+	WASCLOSED=0
+
+	touch "$PIDLOCK"
+
+	while [ "$COUNTER" -lt "$MAXWAIT" ]; do
+		if [ -f "$CLOSETMP" ]; then
+			writelog "WAIT" "${FUNCNAME[0]} - ${PROGNAME,,} is just closing - leaving loop"
+			WASCLOSED=1
+			break
+		fi
+		TESTPID="$("$XDO" getactivewindow getwindowpid)"
+		SYMCWD="$(readlink "/proc/$TESTPID/cwd")"
+		SYMEXE="$(readlink "/proc/$TESTPID/exe")"
+
+		if [ -z "$TESTPID" ]; then
+			continue
+		fi
+
+		if [ -n "$HAVPA" ]; then
+			writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for game 'HAVPA' '$HAVPA' - leaving loop"
+			FOUNDWIN="$YES"
+			break;
+		elif [ -n "$EXECUTABLE" ] && [ "$EXECUTABLE" == "$(cat "/proc/$TESTPID/comm")" ]; then
+			writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for game 'EXECUTABLE' '$EXECUTABLE' - leaving loop"
+			FOUNDWIN="$YES"
+			break;
+		elif [ -n "$GE" ] && [ "$GE" == "$(cut -d '.' -f1 < "/proc/$TESTPID/comm")" ]; then
+			writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for game executable 'GE' '$GE' - leaving loop"
+			FOUNDWIN="$YES"
+			break;
 		else
-			MAXWAIT=20
-			COUNTER=0
-			TESTPID="$NON"
-			WASCLOSED=0
-
-			touch "$PIDLOCK"
-
-			while [ "$COUNTER" -lt "$MAXWAIT" ]; do
-				if [ -f "$CLOSETMP" ]; then
-					writelog "WAIT" "${FUNCNAME[0]} - ${PROGNAME,,} is just closing - leaving loop"
-					WASCLOSED=1
-					break
-				fi
-				TESTPID="$("$XDO" getactivewindow getwindowpid)"
-				SYMCWD="$(readlink "/proc/$TESTPID/cwd")"
-				SYMEXE="$(readlink "/proc/$TESTPID/exe")"
-
-				if [ -n "$TESTPID" ]; then
-					if [ -n "$HAVPA" ]; then
-						writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for game 'HAVPA' '$HAVPA' - leaving loop"
-						FOUNDWIN="$YES"
-						break;
-					elif [ -n "$EXECUTABLE" ] && [ "$EXECUTABLE" == "$(cat "/proc/$TESTPID/comm")" ]; then
-						writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for game 'EXECUTABLE' '$EXECUTABLE' - leaving loop"
-						FOUNDWIN="$YES"
-						break;
-					elif [ -n "$GE" ] && [ "$GE" == "$(cut -d '.' -f1 < "/proc/$TESTPID/comm")" ]; then
-						writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for game executable 'GE' '$GE' - leaving loop"
-						FOUNDWIN="$YES"
-						break;
-					else
-						# might not even be required anymore - maybe remove later:
-						if [[ "$SYMCWD" == "$EFD" ]] && [[ "$SYMEXE" != *"$YAD"* ]]; then
-							writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for CWD '$SYMCWD' with EXE '$SYMEXE' - leaving loop"
-							FOUNDWIN="$YES"
-							break;
-						fi
-						if [ -n "$STEAM_COMPAT_CLIENT_INSTALL_PATH" ] && [[ "$SYMCWD" == "$STEAM_COMPAT_CLIENT_INSTALL_PATH" ]] && [[ "$SYMEXE" != *"$YAD"* ]]; then
-							writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for STEAM_COMPAT_CLIENT_INSTALL_PATH '$SYMCWD' with EXE '$SYMEXE' - leaving loop"
-							FOUNDWIN="$YES"
-							break;
-						fi
-					fi
-				fi
-				writelog "WAIT" "${FUNCNAME[0]} - Sec $COUNTER/$MAXWAIT Game Window with pwd '$EFD' not yet in front"
-				COUNTER=$((COUNTER+1))
-				sleep 1
-			done
-
-			rm "$PIDLOCK" 2>/dev/null
-
-			if [ "$FOUNDWIN" == "$YES" ]; then
-				if [ "$TESTPID" == "$NON" ]; then
-					writelog "SKIP" "${FUNCNAME[0]} - FAIL - Found PID returned but it is empty: '$TESTPID'"
-				fi
-				writelog "INFO" "${FUNCNAME[0]} - Found PID '$TESTPID' for running exe '$(readlink "/proc/$TESTPID/exe")'"
-				echo "$TESTPID"
-			else
-				if [ "$WASCLOSED" -eq 0 ]; then
-					writelog "SKIP" "${FUNCNAME[0]} - ERROR - timeout waiting for '$EFD' window"
-					echo "$NON"
-				fi
+			# might not even be required anymore - maybe remove later:
+			if [[ "$SYMCWD" == "$EFD" ]] && [[ "$SYMEXE" != *"$YAD"* ]]; then
+				writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for CWD '$SYMCWD' with EXE '$SYMEXE' - leaving loop"
+				FOUNDWIN="$YES"
+				break;
+			fi
+			if [ -n "$STEAM_COMPAT_CLIENT_INSTALL_PATH" ] && [[ "$SYMCWD" == "$STEAM_COMPAT_CLIENT_INSTALL_PATH" ]] && [[ "$SYMEXE" != *"$YAD"* ]]; then
+				writelog "WAIT" "${FUNCNAME[0]} - Found PID '$TESTPID' for STEAM_COMPAT_CLIENT_INSTALL_PATH '$SYMCWD' with EXE '$SYMEXE' - leaving loop"
+				FOUNDWIN="$YES"
+				break;
 			fi
 		fi
+
+		writelog "WAIT" "${FUNCNAME[0]} - Sec $COUNTER/$MAXWAIT Game Window with pwd '$EFD' not yet in front"
+		COUNTER=$((COUNTER+1))
+		sleep 1
+	done
+
+	rm "$PIDLOCK" 2>/dev/null
+
+	if [ "$FOUNDWIN" == "$YES" ]; then
+		if [ "$TESTPID" == "$NON" ]; then
+			writelog "SKIP" "${FUNCNAME[0]} - FAIL - Found PID returned but it is empty: '$TESTPID'"
+		fi
+
+		writelog "INFO" "${FUNCNAME[0]} - Found PID '$TESTPID' for running exe '$(readlink "/proc/$TESTPID/exe")'"
+		echo "$TESTPID"
+	elif [ "$WASCLOSED" -eq 0 ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - ERROR - timeout waiting for '$EFD' window"
+		echo "$NON"
 	fi
 }
 
@@ -7752,80 +7832,100 @@ function pickGameWindowNameMeta {
 
 # General function for the "steamtinkerlaunch list <arg> function"
 # Can take two types of commands:
-# - `steamtinkerlaunch list owned/installed` - Returns "Game Name (AppID)"
-# - `steamtinkerlaunch list owned/installed id/name/path/full` - Returns either AppID, Game Name, Game Paths, or all in the format "Game Name (AppID) -> /path/to/game"
+# - `steamtinkerlaunch list owned/installed/non-steam` - Returns "Game Name (AppID)"
+# - `steamtinkerlaunch list owned/installed/non-steam id/name/path/full` - Returns either AppID, Game Name, Game Paths, or all in the format "Game Name (AppID) -> /path/to/game"
+#
+# This function is not very efficient, Non-Steam Games in particular are inefficient because we read shortcuts.vdf each time we want to parse info
+# We parse it once to get the IDs, then again in each `getTitleFromID` and `getGameDir` call. This makes it pretty slow
+# It works for now, but in future we should enhance it
+#
+# One potential way to enhance this function is to split it out into a separate function for each filter type, but we would need
+# to consider how this function is used by other parts of the codebase and if that could be disruptive.
 function listSteamGames {
 	function getGameCount {
+		TOTALGAMESOWNEDPRINTFSTR=""
+
 		if [ "$LSFILTER" == "owned" ] || [ "$LSFILTER" == "o" ]; then
-			printf "Total games owned: %s\n" "${#LISTAIDSARR[@]}"
+			TOTALGAMESOWNEDPRINTFSTR="Total games owned"
+		elif [ "$LSFILTER" == "non-steam" ] || [ "$LSFILTER" == "nsg" ]; then
+			TOTALGAMESOWNEDPRINTFSTR="Total Non-Steam Games in library"
 		else
-			printf "Total games installed: %s\n" "${#LISTAIDSARR[@]}"
+			TOTALGAMESOWNEDPRINTFSTR="Total games installed"
 		fi
+
+		printf "${TOTALGAMESOWNEDPRINTFSTR}: %s\n" "${#LISTAIDSARR[@]}"
 	}
 
-	LSFILTER="$1"  # e.g. "owned", "installed"
+	LSFILTER="$1"  # e.g. "owned", "installed", "non-steam"
 	LSTYPE="$2"  # e.g. "id", "name", "path", "count", "full"
 	LISTAIDS=""
+
+	SEARCHSTEAMSHORTCUTS="0"
 
 	if [ "$LSFILTER" == "owned" ] || [ "$LSFILTER" == "o" ]; then
 		LISTAIDS="$( getOwnedAids )"
 	elif [ "$LSFILTER" == "installed" ] || [ "$LSFILTER" == "i" ]; then
-		if [ "$(listInstalledGameIDs | wc -l)" -eq 0 ]; then
-			writelog "SKIP" "${FUNCNAME[0]} - No installed games found!" "E"
-			echo "No installed games found!"
-
-			exit
-		else
-			LISTAIDS="$( listInstalledGameIDs )"
-		fi
+		LISTAIDS="$( listInstalledGameIDs )"
+	elif [ "$LSFILTER" == "non-steam" ] || [ "$LSFILTER" == "nsg" ]; then
+		LISTAIDS="$( listNonSteamGameIDs )"
+		SEARCHSTEAMSHORTCUTS="1"  # Only search Steam Shortcuts if we passed that filter type
 	else
+		writelog "INFO" "${FUNCNAME[0]} - Unknown argument passed to 'list' command - '$LSFILTER'"
 		echo "unknown argument passed to 'list' command - '$LSFILTER'"
+
+		exit
 	fi
 
-	if [ -n "$LISTAIDS" ]; then
-		readarray -t LISTAIDSARR <<<"$LISTAIDS"
+	if [ -z "$LISTAIDS" ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - No games found for given filter '$LSFILTER'"
+		echo "No games found for filter '$LSFILTER'."
 
-		if [ "$LSTYPE" == "id" ]; then
-			for AID in "${LISTAIDSARR[@]}"; do
-				echo "$AID"
-			done
-		elif [ "$LSTYPE" == "name" ]; then
-			for AID in "${LISTAIDSARR[@]}"; do
-				getTitleFromID "${AID}"
-			done
-		elif [ "$LSTYPE" == "path" ]; then
-			if [ "$LSFILTER" == "owned" ] || [ "$LSFILTER" == "o" ]; then
-				echo "Cannot use 'path' option when returning 'owned' games, as not all owned games will have an installation path!"
-				echo "Use another option instead, or leave blank to only return path for games which have an installation path."
-			else
-				for AID in "${LISTAIDSARR[@]}"; do
-					getGameDir "$AID" "1"
-				done
-			fi
-		elif [ "$LSTYPE" == "count" ]; then
-			printf "\n%s" "$( getGameCount )"
-		elif [ "$LSTYPE" == "full" ] || [ -z "$LSTYPE" ]; then  # This is the default if id/name/path/full is not passed
-			for AID in "${LISTAIDSARR[@]}"; do
-				GAMDIR="$( getGameDir "$AID" )"
-				GAMDIREXISTS=$?
+		exit
+	fi
 
-				# Only display game dir if the game is installed, i.e. if getGameDir does not return 1
-				# This means we won't return an error if we're returning OWNED games, as some owned games may not have paths
-				if [ "$GAMDIREXISTS" -eq 1 ]; then
-					GAMNAM="$( getTitleFromID "$AID" )"
-					GAMNAMEXISTS=$?
-					if [ "$GAMNAMEXISTS" -eq 1 ]; then
-						echo "$AID"  # Game name unknown, probably never installed before? Just return AppID in this case
-					else
-						echo "$GAMNAM ($AID)"
-					fi
-				else
-					echo "$GAMDIR"
-				fi
-			done
+	readarray -t LISTAIDSARR <<<"$LISTAIDS"
 
-			printf "\n%s" "$( getGameCount )"  # Show total for "full"
+	if [ "$LSTYPE" == "id" ]; then
+		for AID in "${LISTAIDSARR[@]}"; do
+			echo "$AID"
+		done
+	elif [ "$LSTYPE" == "name" ]; then
+		for AID in "${LISTAIDSARR[@]}"; do
+			getTitleFromID "${AID}" "${SEARCHSTEAMSHORTCUTS}"
+		done
+	elif [ "$LSTYPE" == "path" ]; then
+		if [ "$LSFILTER" == "owned" ] || [ "$LSFILTER" == "o" ]; then
+			echo "Cannot use 'path' option when returning 'owned' games, as not all owned games will have an installation path!"
+			echo "Use another option instead, or leave blank to only return path for games which have an installation path."
+
+			exit
 		fi
+		for AID in "${LISTAIDSARR[@]}"; do
+			getGameDir "$AID" "1" "${SEARCHSTEAMSHORTCUTS}"
+		done
+	elif [ "$LSTYPE" == "count" ]; then
+		printf "\n%s\n" "$( getGameCount )"
+	elif [ "$LSTYPE" == "full" ] || [ -z "$LSTYPE" ]; then  # This is the default if id/name/path/full is not passed
+		for AID in "${LISTAIDSARR[@]}"; do
+			GAMDIR="$( getGameDir "$AID" "" "${SEARCHSTEAMSHORTCUTS}" )"
+			GAMDIREXISTS=$?
+
+			# Only display game dir if the game is installed, i.e. if getGameDir does not return 1
+			# This means we won't return an error if we're returning OWNED games, as some owned games may not have paths
+			if [ "$GAMDIREXISTS" -eq 1 ]; then
+				GAMNAM="$( getTitleFromID "$AID" "${SEARCHSTEAMSHORTCUTS}" )"
+				GAMNAMEXISTS=$?
+				if [ "$GAMNAMEXISTS" -eq 1 ]; then
+					echo "$AID"  # Game name unknown, probably never installed before? Just return AppID in this case
+				else
+					echo "$GAMNAM ($AID)"
+				fi
+			else
+				echo "$GAMDIR"
+			fi
+		done
+
+		printf "\n%s\n" "$( getGameCount )"  # Show total for "full"
 	fi
 }
 
@@ -8291,6 +8391,13 @@ function getSteamShortcutHex {
 function getSteamShortcutsVdfFileHex {
 	SCPATH="$STUIDPATH/config/$SCVDF"
 	xxd -p -c 0 "$SCPATH"
+}
+
+function listNonSteamGameIDs {
+	writelog "INFO" "${FUNCNAME[0]} - Reading all Non-Steam AppIDs from shortcuts.vdf"
+	while read -r SCVDFE; do
+		parseSteamShortcutEntryAppID "$SCVDFE"
+	done <<< "$( getSteamShortcutHex )"
 }
 
 function haveAnySteamShortcuts {
@@ -9116,8 +9223,11 @@ function ShaderRepoDialog {
 
 function setFullGameExePath {
 	if [[ ( "$USECUSTOMCMD" -eq 1 && -f "$CUSTOMCMD" && "$CUSTOMCMDRESHADE" -eq 1 ) || "$ONLY_CUSTOMCMD" -eq 1 ]]; then
-		FGEP="${CUSTOMCMD%/*}"
-
+		# Use Alternative EXE Path if defined instead of custom command path
+		# We should only use the custom command directory if no alternatiive EXE path is defined, and
+		# we should prioritise the alt path if it is defined
+		DEFINEDALTEXEPATH="$(GETALTEXEPATH)"
+		FGEP="${DEFINEDALTEXEPATH:-${CUSTOMCMD%/*}}"
 		writelog "INFO" "${FUNCNAME[0]} - Using the directory '$FGEP' of the used custom command as absolute game exe path"
 
 		if [ "$CUSTOMCMDRESHADE" -eq 1 ]; then
@@ -9566,7 +9676,7 @@ function installRSdll {
 function installReshade {
 	if [ "$USERESHADE" -eq 1 ]; then
 		prepareReshadeFiles
-		setShadDestDir
+		setShadDestDir  # Have to use setShadDestDir because setShadDest will use ABSGAMEEXEPATH which is not Custom Command
 
 		INSTDESTDIR="$SHADDESTDIR"
 
@@ -11712,7 +11822,13 @@ function GameScopeGui {
 						## FILTERING OPTIONS END ###
 
 						### HDR OPTIONS ###
-						if [ "$GSHDR" == "TRUE" ]                                       ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --hdr-enabled"; fi  # Possible to check if any HDR displays available and warn if not?
+						# Possible to check if any HDR displays available and warn if not?
+						if [ "$GSHDR" == "TRUE" ]; then
+							GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --hdr-enabled";
+
+							writelog "INFO" "${FUNCNAME[0]} - GameScope HDR enabled, forcing DXVK_HDR=1"
+							export DXVK_HDR=1
+						fi
 						if [ "$GSHDRWGFS" == "TRUE" ]; then
 							# Don't enable GSHDRWGFS if GSHDR is not enabled first
 							if [ "$GSHDR" == "TRUE" ]; then
@@ -12118,6 +12234,8 @@ function OneTimeRunReset {
 }
 
 # Called when a user passes arguments for onetimerun
+# TODO a way to use default game Proton version, either if '--proton' is not supplied or if '--proton="default"'?
+# TODO add a way to use PROTON_LOG with custom command?
 function commandlineOneTimeRun {
 	setOneTimeRunVars "$1"
 	# Get incoming arguments
@@ -12171,6 +12289,7 @@ function commandlineOneTimeRun {
 	fi
 
 	# Ensure EXE is given and that directory to run the exe in is valid, and also ensure we have a valid Proton version to run the exe with
+	# TODO refactor to flatten
 	if [ -n "$OTEXE" ] && [ -f "$OTEXE" ]; then  # Valid executable required (Windows executable or Linux executable/file/etc, not really an EXE for Linux but oh well - Naming is hard!)
 		if [ "$USEEXEDIR" -eq 1 ]; then  # Use EXE dir as working dir
 			OTRUNDIR="$( dirname "$OTEXE" )"
@@ -12194,9 +12313,27 @@ function commandlineOneTimeRun {
 					return
 				fi
 				writelog "INFO" "${FUNCNAME[0]} - Trying to find Proton version to launch executable with from given Proton name '$RUNOTPROTON'"
+
+				# If user did not pass '--proton', then use the game's Proton version
+				if [ -z "$RUNOTPROTON" ]; then
+					writelog "INFO" "${FUNCNAME[0]} - Did not get RUNOTPROTON from '--proton' option (perhaps this option was omitted?), so using per-game Proton version (USEPROTON) '$USEPROTON'"
+					RUNOTPROTON="$USEPROTON"
+					OTPROTON="$USEPROTON"
+				fi
+
 				RUNOTPROTON="$(getProtPathFromCSV "$RUNOTPROTON")"
 				if [ ! -f "$RUNOTPROTON" ]; then
-					RUNOTPROTON="$(fixProtonVersionMismatch "OTPROTON" "$STLGAMECFG" X)"  # TODO re-check to make sure this is valid?
+					writelog "INFO" "${FUNCNAME[0]} - RUNOTPROTON '$RUNOTPROTON' could not be found in ProtonCSV -- Attempting to resolve mismatch"
+					# "1" forces fixProtonVersionMismatch to run even though ISGAME != 2 (ISGAME -eq 2 means Proton game, but ISGAME may not be 2 for One-Time Run, so we force Proton version resolution)
+					if [ -n "$RUNOTPROTON" ]; then
+						RUNOTPROTON="$(fixProtonVersionMismatch "RUNOTPROTON" "$STLGAMECFG" "1" X)"
+					else
+						writelog "INFO" "${FUNCNAME[0]} - Attemptiing to resolve Proton version mismatch for blank RUNOTPROTON '$RUNOTPROTON' by instead trying to resolve based on USEPROTON '$USEPROTON' which should hopefully not be blank"
+						RUNOTPROTON="$(fixProtonVersionMismatch "USEPROTON" "$STLGAMECFG" "1" X)"
+					fi
+
+					# Update OTPROTON to make sure it matches any Proton version mismatch fixes / to have a value if One-Time Run was called without '--proton' (i.e use the Game Proton version)
+					OTPROTON="$( getProtNameFromPath "$RUNOTPROTON" )"
 				fi
 			else
 				writelog "INFO" "${FUNCNAME[0]} - Given executable detected as native Linux binary, this is usually correct but if this was detected incorrectly you should force Proton!"
@@ -12219,8 +12356,8 @@ function commandlineOneTimeRun {
 				# NOTE: Having save here means values won't save unless a launch is successful -- This is probably ok, but just a note for future reference
 				if [ "$OTSAVE" == "TRUE" ];then  # Save one-time settings to game config file -- Really only useful for OneTimeRunGUI
 					writelog "INFO" "${FUNCNAME[0]} - Saving One time run settings into '$STLGAMECFG'"
-					# Only save Proton version if we're using a Windows executable, otherwise we don't set a Proton version!
 
+					# Only save Proton version if we're using a Windows executable, otherwise we don't set a Proton version!
 					if [ "$ISWINDOWSEXE" -eq 1 ]; then
 						touch "$FUPDATE"
 						updateConfigEntry "OTPROTON" "$OTPROTON" "$STLGAMECFG"
@@ -12257,14 +12394,14 @@ function commandlineOneTimeRun {
 
 					if [ -n "${SLRCMD[*]}" ] && [ "$OTSLR" -eq 1 ]; then  # Use SLR
 						writelog "INFO" "${FUNCNAME[0]} - Starting '$OTEXE' with '$RUNOTPROTON' with STEAM_COMPAT_DATA_PATH '$STEAM_COMPAT_DATA_PATH' and using working directory '$OTRUNDIR' and using the Steam Linux Runtime"
-						writelog "INFO" "${FUNCNAME[0]} - cd \"$OTRUNDIR\" && STEAM_COMPAT_DATA_PATH=\"$STEAM_COMPAT_DATA_PATH\" \"${SLRCMD[*]}\" \"$RUNOTPROTON\" run \"$OTEXE\" \"${RUNOTARGS[*]}\""
+						writelog "INFO" "${FUNCNAME[0]} - cd \"$OTRUNDIR\" && STEAM_COMPAT_CLIENT_INSTALL_PATH=\"${SROOT}\" STEAM_COMPAT_DATA_PATH=\"$STEAM_COMPAT_DATA_PATH\" \"${SLRCMD[*]}\" \"$RUNOTPROTON\" run \"$OTEXE\" \"${RUNOTARGS[*]}\""
 
 						notiShow "$( strFix "$NOTY_OTRSTARTSLR" "$( basename "$OTEXE" )" "$NOTYPROTNAME" )"
 
 						(cd "$OTRUNDIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$SROOT" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" "${SLRCMD[@]}" "$RUNOTPROTON" run "$OTEXE" "${RUNOTARGS[@]}")
 					else  # No SLR
 						writelog "INFO" "${FUNCNAME[0]} - Starting '$OTEXE' with '$RUNOTPROTON' with STEAM_COMPAT_DATA_PATH '$STEAM_COMPAT_DATA_PATH' and using working directory '$OTRUNDIR'"
-						writelog "INFO" "${FUNCNAME[0]} - cd \"$OTRUNDIR\" && STEAM_COMPAT_DATA_PATH=\"$STEAM_COMPAT_DATA_PATH\" \"$RUNOTPROTON\" run \"$OTEXE\" \"${RUNOTARGS[*]}\""
+						writelog "INFO" "${FUNCNAME[0]} - cd \"$OTRUNDIR\" && STEAM_COMPAT_CLIENT_INSTALL_PATH=\"${SROOT}\" STEAM_COMPAT_DATA_PATH=\"$STEAM_COMPAT_DATA_PATH\" \"$RUNOTPROTON\" run \"$OTEXE\" \"${RUNOTARGS[*]}\""
 
 						notiShow "$( strFix "$NOTY_OTRSTART" "$( basename "$OTEXE" )" "$NOTYPROTNAME" )"
 
@@ -12712,8 +12849,9 @@ function launchCustomProg {
 			writelog "INFO" "${FUNCNAME[0]} - Generated arguments for custom command are now '${FINALOUTCMD[*]}'"
 		fi
 
+		# Use Wine/Proton with a custom command if it is detected as a Windows executable, a batch script (.bat), a Windows shortcut (.lnk), or if the user forces Proton
 		# Cannot always rely on `file` to return `PE32` even for Windows executables -- See #710 (seems to be when exe files are built on Linux they are not PE32)
-		if [ "$(file "$CUSTCOM" | grep -c "PE32")" -eq 1 ] || grep -q ".bat" <<< "$CUSTCOM" || [ "$CUSTOMCMDFORCEWIN" -eq 1 ]; then
+		if [ "$(file "$CUSTCOM" | grep -c "PE32")" -eq 1 ] || grep -q ".bat" <<< "$CUSTCOM" || grep -q ".lnk" <<< "$CUSTCOM" || [ "$CUSTOMCMDFORCEWIN" -eq 1 ]; then
 			if [ "$CUSTOMCMDFORCEWIN" -eq 1 ]; then
 				# Force custom command to use Wine/Proton, even if we do not detect it as a valid Windows binary
 				writelog "INFO" "${FUNCNAME[0]} - CUSTOMCMDFORCEWIN is '$CUSTOMCMDFORCEWIN' - User wants to force this custom command as a Windows program"
@@ -12730,24 +12868,24 @@ function launchCustomProg {
 				writelog "INFO" "${FUNCNAME[0]} - '$CUSTCOM' seems to be a MS console program - starting using '$WICO'"
 				if [ "$FORK_CUSTOMCMD" -eq 1 ]; then
 					writelog "INFO" "${FUNCNAME[0]} - FORK_CUSTOMCMD is set to 1 - forking the custom program in background and continue"
-					extProtonRun "FC" "$LACO" "$CUSTOMCMD_ARGS"
+					extProtonRun "FC" "$LACO" "$CUSTOMCMD_ARGS" "" "${CUSTOMCMD_USESLR}"
 				elif [ "$ONLY_CUSTOMCMD" -eq 1 ] && [ -n "${FINALOUTCMD[*]}" ]; then
-					writelog "INFO" "${FUNCNAME[0]} - ONLY_CUSTOMCMD is set to 1 and we have some arguments in FINALOUTCMD - passing to extProtonRun to build a valid start command"
-					extProtonRun "R" "$LACO" "$CUSTOMCMD_ARGS" "$FINALOUTCMD"  # extProtonRun will handle adding the FINALOUTCMD args to
+					writelog "INFO" "${FUNCNAME[0]} - ONLY_CUSTOMCMD is set to 1 and we have some arguments in FINALOUTCMD - passing to extProtonRun to build a valid start command"	
+					extProtonRun "R" "$LACO" "$CUSTOMCMD_ARGS" "$FINALOUTCMD" "${CUSTOMCMD_USESLR}"  # extProtonRun will handle adding the FINALOUTCMD args to
 				else
-					extProtonRun "RC" "$LACO" "$CUSTOMCMD_ARGS"
+					extProtonRun "RC" "$LACO" "$CUSTOMCMD_ARGS" "" "${CUSTOMCMD_USESLR}"
 				fi
 			else  # GUI Wine/Proton program
 				writelog "INFO" "${FUNCNAME[0]} - '$CUSTCOM' seems to be a MS gui program - starting regularly"
 
 				if [ "$FORK_CUSTOMCMD" -eq 1 ]; then
 					writelog "INFO" "${FUNCNAME[0]} - FORK_CUSTOMCMD is set to 1 - forking the custom program in background and continue"
-					extProtonRun "F" "$LACO" "$CUSTOMCMD_ARGS"
+					extProtonRun "F" "$LACO" "$CUSTOMCMD_ARGS" "" "${CUSTOMCMD_USESLR}"
 				elif [ "$ONLY_CUSTOMCMD" -eq 1 ] && [ -n "$FINALOUTCMD" ]; then
 					writelog "INFO" "${FUNCNAME[0]} - ONLY_CUSTOMCMD is set to 1 and we have some arguments in FINALOUTCMD - passing to extProtonRun to build a valid start command"
-					extProtonRun "R" "$LACO" "$CUSTOMCMD_ARGS" "${FINALOUTCMD[*]}"  # extProtonRun will handle adding the FINALOUTCMD args
+					extProtonRun "R" "$LACO" "$CUSTOMCMD_ARGS" "${FINALOUTCMD[*]}" "${CUSTOMCMD_USESLR}" "${CUSTOMCMD_USESLR}"  # extProtonRun will handle adding the FINALOUTCMD args
 				else
-					extProtonRun "R" "$LACO" "$CUSTOMCMD_ARGS"
+					extProtonRun "R" "$LACO" "$CUSTOMCMD_ARGS" "" "${CUSTOMCMD_USESLR}"
 				fi
 			fi
 		else  # Native custom command
@@ -12772,6 +12910,39 @@ function launchCustomProg {
 
 			FWAIT=2
 
+			# TODO should respect selected SLR once #1087 is implemented
+			if [ "$CUSTOMCMD_USESLR" -eq 1 ]; then
+				unset "${SLRCMD[@]}"
+
+				writelog "INFO" "${FUNCNAME[0]} - Steam Linux Runtime enabled, attempting to fetch Steam Linux Runtime for native Custom Command"
+				# "2" is the FORCESLRTYPE, meaning we want to force to get the native SLR -- We do this in case we are trying to launch a native custom command with a Proton title
+				# In this case, setSLRReap is going to have the Proton SLR vars set from the game launch, so we need to force it here to use the native SLR 
+				setNonGameSLRReap "2"
+			fi
+
+			# TODO this is the exact same logic as in extProtonRun (except the log messages are slightly different), is there any way to share it?
+			if [ -n "${SLRCMD[*]}" ]; then
+				writelog "INFO" "${FUNCNAME[0]} - Gotten Steam Linux Runtime for native launch, using RUNEXTPROGRAMARGS array to contain it and add it to launch command"
+
+				OLDRUNEXTPROGRAMARGS=( "${RUNEXTPROGRAMARGS[@]}" )
+
+				unset "${RUNEXTPROGRAMARGS[@]}"
+				RUNEXTPROGRAMARGS=( "${SLRCMD[@]}" )
+
+				# OLDRUNEXTPROGRAMARGS should only contain one item, the passed args for the custom command
+				# if the first item here is not empty, assume we have to include the old pass args in the new array
+				#
+				# if blank, it means OLDRUNEXTPROGRAMARGS was most likely empty (or started with a blank element, which would cause a crash anyway)
+				# so we can just create RUNEXTPROGRAMARGS with the SLR as the only element
+				if [ -n "${OLDRUNEXTPROGRAMARGS[0]}" ]; then
+					writelog "INFO" "${FUNCNAME[0]} - Seems like some arguments were given to the custom command, including them alongside the Steam Linux Runtime arguments"
+					RUNEXTPROGRAMARGS+=( "${OLDRUNEXTPROGRAMARGS[@]}" )
+				fi
+			elif [ -z "${SLRCMD[*]}" ] && [ "$CUSTOMCMD_USESLR" -eq 1 ]; then
+				writelog "WARN" "${FUNCNAME[0]} - Attempted to fetch Steam Linux Runtime but failed to find one!"
+			fi
+			unset "${SLRCMD[@]}"
+
 			# Launch native custom command
 			NATIVEPROGNAME="$( basename "$LACO" )"
 			if [ -n "$1" ]; then
@@ -12785,17 +12956,21 @@ function launchCustomProg {
 				if [ "$FORK_CUSTOMCMD" -eq 1 ]; then  # Forked native custom program
 					writelog "INFO" "${FUNCNAME[0]} - FORK_CUSTOMCMD is set to 1 - forking the custom program in background and continue"
 					if [ -n "${RUNEXTPROGRAMARGS[0]}" ]; then
-						(sleep "$FWAIT"; notiShow "$( strFix "$NOTY_CUSTPROG_FORKED_NATIVE" "$NATIVEPROGNAME" )"; "${RUNEXTPROGRAMARGS[@]}" "$LACO" "${RUNCUSTOMCMD_ARGS[@]}") &
+						writelog "INFO" "${FUNCNAME[0]} - \"${RUNEXTPROGRAMARGS[*]}\" \"${LACO}\" \"${RUNCUSTOMCMD_ARGS[*]}\""
+						(sleep "$FWAIT"; notiShow "$( strFix "$NOTY_CUSTPROG_FORKED_NATIVE" "$NATIVEPROGNAME" )"; "${RUNEXTPROGRAMARGS[@]}" "$LACO" "${RUNCUSTOMCMD_ARGS[@]}" 2>&1 | tee "$STLSHM/${FUNCNAME[0]}.log") &
 					else
-						(sleep "$FWAIT"; notiShow "$( strFix "$NOTY_CUSTPROG_FORKED_NATIVE" "$NATIVEPROGNAME" )"; "$LACO" "${RUNCUSTOMCMD_ARGS[@]}") &
+						writelog "INFO" "${FUNCNAME[0]} - \"${LACO}\" \"${RUNCUSTOMCMD_ARGS[*]}\""
+						(sleep "$FWAIT"; notiShow "$( strFix "$NOTY_CUSTPROG_FORKED_NATIVE" "$NATIVEPROGNAME" )"; "$LACO" "${RUNCUSTOMCMD_ARGS[@]}" 2>&1 | tee "$STLSHM/${FUNCNAME[0]}.log") &
 					fi
 				else  # Regular native executable
 					writelog "INFO" "${FUNCNAME[0]} - Starting native custom command regularly"
 					notiShow "$( strFix "$NOTY_CUSTPROG_REG_NATIVE" "$NATIVEPROGNAME" )"
 					if [ -n "${RUNEXTPROGRAMARGS[0]}" ]; then
-						"${RUNEXTPROGRAMARGS[@]}" "$LACO" "${RUNCUSTOMCMD_ARGS[@]}"
+						writelog "INFO" "${FUNCNAME[0]} - \"${RUNEXTPROGRAMARGS[*]}\" \"${LACO}\" \"${RUNCUSTOMCMD_ARGS[*]}\""
+						"${RUNEXTPROGRAMARGS[@]}" "$LACO" "${RUNCUSTOMCMD_ARGS[@]}" 2>&1 | tee "$STLSHM/${FUNCNAME[0]}.log"
 					else
-						"$LACO" "${RUNCUSTOMCMD_ARGS[@]}"
+						writelog "INFO" "${FUNCNAME[0]} - \"${LACO}\" \"${RUNCUSTOMCMD_ARGS[*]}\""
+						"$LACO" "${RUNCUSTOMCMD_ARGS[@]}" 2>&1 | tee "$STLSHM/${FUNCNAME[0]}.log"
 					fi
 				fi
 			fi
@@ -12890,6 +13065,24 @@ function setGameFilesArray {
 	if [ -f "$MAHUCID/${AID}.conf" ]; then
 		GamDesc+=("$GUI_MANGOHUDGAMECFG")
 		GamFiles+=("$MAHUCID/${AID}.conf")
+	fi
+
+	# Open /dev/shm/steamtinkerlaunch directory
+	if [ -d "$STLSHM" ]; then
+		GamDesc+=("$GUI_STLSHMDIR")
+		GamFiles+=("$STLSHM")
+	fi
+
+	# Open logfile at /dev/shm/steamtinkerlaunch/steamtinkerlaunch.log
+	if [ -f "$TEMPLOG" ]; then
+		GamDesc+=("$GUI_STLSHMLOG")
+		GamFiles+=("$TEMPLOG")
+	fi
+
+	# Open game logging directory at, by default, STLCFGDIR/logs/steamtinkerlaunch
+	if [ -d "$LOGDIR" ]; then
+		GamDesc+=("$GUI_STLPERGAMELOGSDIR")
+		GamFiles+=("$LOGDIR")
 	fi
 
 	createCustomCfgs
@@ -13319,7 +13512,9 @@ function redirectSCDP {
 
 	## There is room for improvement here, community contributions welcome!
 	if [ -n "$STEAM_COMPAT_DATA_PATH" ]; then # should be enough
-		VERSPROTMAJOR="${USEPROTON%-*}"  # Turns Proton name from "proton-8.0-3c" to "proton-8.0"
+		VERSPROTMAJOR="$( printf '%s' "${USEPROTON}" | sed -e 's/-\(rc\|beta\)[0-9]\+$//' \
+															-e 's/-[0-9A-Za-z_]\+$//' )"
+		# Above first removes -beta# and -rc# from Proton names. Then turns the Proton name from "proton-8.0-3c" to "proton-8.0"
 		VERSFIX="$(grep "${PROTVERSNOMINOR}" "$PROTONCSV" | cut -d ';' -f1 | sort -nr | head -n1)"
 
 		if [ "${ONLYPROTMAJORREDIRECT}" -eq 1 ]; then  # Only create redirect folders for major Proton version bumps, such as GE-Proton7 -> GE-Proton8, or Proton 7.0 -> Proton 8.0 (IGNORING minor fix versions)
@@ -15711,9 +15906,12 @@ function wineVortexRun {
 	## Only use SLR is available and (if user explicitly wants to run Vortex with dotnet OR if dotnet6 is not already installed), because the SLR can cause hardlink deployment to fail
 	## See also: https://github.com/sonic2kk/steamtinkerlaunch/issues/828
 
+	writelog "INFO" "${FUNCNAME[0]} - Vortex logs will be stored at '${VWRUN}'"
 	if [[ -n "${SLRCMD[*]}" && ( "$VORTEXUSESLRPOSTINSTALL" -eq 1 || ! -d "$VORTEXPFX/$DRC/Program Files/dotnet" ) ]]; then
+		writelog "INFO" "${FUNCNAME[0]} - PATH=\"${SLTPATH}\" LD_LIBRARY_PATH=\"\" WINE=\"${VORTEXWINE}\" WINEARCH=\"win64\" WINEDEBUG=\"-all\" WINEPREFIX=\"${VORTEXPFX}\" \"${SLRCMD[*]}\" \"$*\""
 		PATH="$STLPATH" LD_LIBRARY_PATH="" LD_PRELOAD="" WINE="$VORTEXWINE" WINEARCH="win64" WINEDEBUG="-all" WINEPREFIX="$VORTEXPFX" "${SLRCMD[@]}" "$@" > "$VWRUN" 2>/dev/null
 	else
+		writelog "INFO" "${FUNCNAME[0]} - PATH=\"${SLTPATH}\" LD_LIBRARY_PATH=\"\" WINE=\"${VORTEXWINE}\" WINEARCH=\"win64\" WINEDEBUG=\"-all\" WINEPREFIX=\"${VORTEXPFX}\" \"$*\""
 		PATH="$STLPATH" LD_LIBRARY_PATH="" LD_PRELOAD="" WINE="$VORTEXWINE" WINEARCH="win64" WINEDEBUG="-all" WINEPREFIX="$VORTEXPFX" "$@" > "$VWRUN" 2>/dev/null
 	fi
 
@@ -16153,7 +16351,7 @@ function setVortSet {
 
 function runVortex {
 	cd "$VORTEXINSTDIR" >/dev/null || return
-	wineVortexRun "$VORTEXWINE" "${VTX^}.exe" "$@"
+	wineVortexRun "$VORTEXWINE" "${VTX^}.exe" "$@" "--force-device-scale-factor=${VORTEXDEVICESCALEFACTOR}"
 	cd - >/dev/null || return
 }
 
@@ -16769,15 +16967,18 @@ function setNonGameSLRReap {
 	HAVEREAP="${HAVEREAP:-0}"
 	HAVESLRCT="${HAVESLRCT:-0}"
 
-	FORCEPROTONSLR="$1"
+	# 0 - No SLR force, let setSLRReap determine what Proton version to use (Default)
+	# 1 - Proton SLR
+	# 2 - Native SLR
+	FORCESLRTYPE="$1"
 
 	# Only get SLRPROTONNAME if we're forcing Proton, otherwise ignore
-	if [ -n "$FORCEPROTONSLR" ] && [ "$FORCEPROTONSLR" -eq 1 ]; then
+	if [ -n "$FORCESLRTYPE" ] && [ "$FORCESLRTYPE" -eq 1 ]; then
 		SLRPROTONNAME="$( getProtPathFromCSV "$2" )"  # This could be the name of the Proton version to run i.e. Vortex
 	fi
 
 	unset "${SLRCMD[@]}"
-	setSLRReap "1" "$FORCEPROTONSLR" "$SLRPROTONNAME"  # Get SLRCMD, optionally enforcing Proton (so we don't fall back to native Linux) and setting the Proton version to fetch the SLR info from (e.g. whether to use soldier, sniper, etc)
+	setSLRReap "1" "$FORCESLRTYPE" "$SLRPROTONNAME"  # Get SLRCMD, optionally enforcing Proton (so we don't fall back to native Linux) and setting the Proton version to fetch the SLR info from (e.g. whether to use soldier, sniper, etc)
 }
 
 function setVortexVars {
@@ -17355,8 +17556,6 @@ function manageMO2GInstance {
 		StatusWindow "$(strFix "$NOTY_INSTSTART" "$MO")" "installMO2" "InstallMO2Status"
 	fi
 
-	echo "$MOINST" > "$LAMOINST"
-
 	if [ -f "$MO2INSTFAIL" ]; then
 		writelog "SKIP" "${FUNCNAME[0]} - '$MO2INSTFAIL' found - seems like installation failed previously - skipping ${FUNCNAME[0]}"
 	else
@@ -17397,6 +17596,7 @@ function manageMO2GInstance {
 						if [ -d "$MO2GADI" ]; then
 							MO2GAZDI="Z:${MO2GADI//\//\\\\}"
 							mkProjDir "$MOIN"
+							writelog "INFO" "${FUNCNAME[0]} - GLOBZMOIN is '$GLOBZMOIN'"
 							touch "$MOININI"
 							# This used to use `echo` but was changed because of ShellCheck SC2028
 							# The behaviour was different too, echo was returning '\\\\' but printf was returning '\\'
@@ -17408,11 +17608,11 @@ function manageMO2GInstance {
 							echo "selected_profile=@ByteArray(Default)"
 							echo "gamePath=@ByteArray($MO2GAZDI)"
 							echo "[Settings]"
-							printf "download_directory=%s\\\\downloads\n" "${GLOBZMOIN}"
-							printf "cache_directory=%s\\\\webcache\n" "${GLOBZMOIN}"
-							printf "mod_directory=%s\\\mods\n" "${GLOBZMOIN}"
-							printf "overwrite_directory=%s\\\\overwrite\n" "${GLOBZMOIN}"
-							printf "profiles_directory=%s\\\\profiles\n" "${GLOBZMOIN}"
+							printf "download_directory=%s\\\\\\\\downloads\r\n" "${GLOBZMOIN}"
+							printf "cache_directory=%s\\\\\\\\webcache\r\n" "${GLOBZMOIN}"
+							printf "mod_directory=%s\\\\\\\\mods\r\n" "${GLOBZMOIN}"
+							printf "overwrite_directory=%s\\\\\\\\overwrite\r\n" "${GLOBZMOIN}"
+							printf "profiles_directory=%s\\\\\\\\profiles\r\n" "${GLOBZMOIN}"
 							} >> "$MOININI"
 							MOINEW=1
 						else
@@ -17556,6 +17756,37 @@ function prepareMO2 {
 	fi
 }
 
+function createMO2SilentModeExeProfilesList {
+	# Get all of the ModOrganizer 2 executables launch configurations in the instance's INI 
+	# The user can use this to override which 'moshortcut://' is launched in Silent Mode
+	MO2SILENTMODEEXEPROFILES="$NON"
+	MO2GAMES="$GLOBALMISCDIR/mo2games.txt"
+
+	# Taken from manageMO2GInstance
+	MO2GA1="$(grep -m1 "\"$AID\"" "$MO2GAMES" | cut -d ';' -f1)"
+	MO2GAM="${MO2GA1//\"}"
+	if [ -z "$MO2GAM" ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - Does not appear that '$AID' is a ModOrganizer 2 game, nothing to do"
+		return
+	fi
+
+	# MO2COMPDATA taken from setMO2Vars
+	MOIN="${MO2COMPDATA//\"/}/pfx/$DRCU/$STUS/$ADLO/$MO/${MO2GAM}/${MO}.ini"
+	writelog "INFO" "${FUNCNAME[0]} - MOIN is '${MOIN}'"
+	if [ ! -f "$MOIN" ]; then
+		writelog "SKIP" "${FUNCNAME[0]} - Nothing to do, ModOrganizer 2 instance INI for '$MO2GAM ($AID)' doesn't exist at '$MOIN' -- Perhaps this game has never been managed with MO2 before?"
+		return
+	fi
+
+	# Executables are stored in INI in format '1\title=Executable Name', where '1' is its position in the MO2 executable profile list
+	while read -r MO2EXEPROF; do
+		# Remove \r with Windows line encoding in INI (\n should already be removed)
+		MO2SILENTMODEEXEPROFILES="${MO2SILENTMODEEXEPROFILES}!${MO2EXEPROF//$'\r'/}"
+	done <<< "$( sed -n 's/^[0-9]\\title=//p' "$MOIN" )"
+
+	writelog "INFO" "${FUNCNAME[0]} - MO2SILENTMODEEXEPROFILES list is '${MO2SILENTMODEEXEPROFILES}'"
+}
+
 function startMO2 {
 	prepareMO2 "$NON" "gui"
 	if [ -d "${MO2EXE%/*}" ] ; then
@@ -17606,6 +17837,15 @@ function dlMod2nexurl {
 					STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" "$RUNPROTON" "run" "${MO}.exe" -i "$MYINST" "$1" 2>&1 | tee /tmp/RUNMO2DL.log
 				else
 					writelog "ERROR" "${FUNCNAME[0]} - Could not find a valid $MO instance for '${MONGURL}' - giving up"
+				fi
+			elif [ -d "${GMO2EXE%/*}" ] && [ -n "$MO2PFX" ] && [ -n "$MO2WINE" ]; then
+				MYINST="$(grep -m1 "\"${MONGURL}\"" "$MO2GAMES" | cut -d ';' -f1)"
+				MYINST="${MYINST//\"/}"
+				if [ -n "$MYINST" ]; then
+					writelog "INFO" "${FUNCNAME[0]} - Starting global MO2 in prefix '$MO2PFX' using '$MO2WINE' on $MYINST"
+					WINEDEBUG="-all" WINEPREFIX="$MO2PFX" "$MO2WINE" "$GMO2EXE" -i "$MYINST" "$1" 2>&1 | tee /tmp/RUNMO2DL.log
+				else
+					writelog "ERROR" "${FUNCNAME[0]} - Could not find a valid global MO2 instance"
 				fi
 			else
 				writelog "ERROR" "${FUNCNAME[0]} - Attempted to download Url '$1' for game '$MONGURL', but seems like global '$MYGLOBDLDAT' has incomplete data - giving up" "E"
@@ -17709,64 +17949,61 @@ function checkMO2 {
 		return
 	fi
 
+	# MO2 disabled means don't use MO2 at all
 	if [ "$MO2MODE" == "disabled" ]; then
 		writelog "SKIP" "${FUNCNAME[0]} - MO2MODE is 'disabled' -- Skipping checkMO2!"
 		return
 	fi
 
-	# if [ "$MO2MODE" != "disabled" ]; then    # This check is because MO2 was once planned to have a silent mode, but no idea if/when this will be implemented, so just explicitly check for GUI
-	if [ "$MO2MODE" == "gui" ]; then
-		writelog "INFO" "${FUNCNAME[0]} - MO2MODE is '$MO2MODE' - starting MO2"
+	# MO2 Wait Requester logic to choose between GUI, Silent, Cancel, or default MO2 mode if the Wait Requester times out
+	writelog "INFO" "${FUNCNAME[0]} - MO2MODE is '$MO2MODE' - starting MO2"
+	if [ "$WAITMO2" -gt 0 ]; then
+		writelog "INFO" "${FUNCNAME[0]} - Opening $MO Requester with timeout '$WAITMO2'"
+		fixShowGnAid
+		export CURWIKI="$PPW/Mod-Organizer-2"
+		TITLE="${PROGNAME}-Open-Mod-Organizer2"
+		pollWinRes "$TITLE"
 
-		if [ "$WAITMO2" -gt 0 ]; then
-			writelog "INFO" "${FUNCNAME[0]} - Opening $MO Requester with timeout '$WAITMO2'"
-			fixShowGnAid
-			export CURWIKI="$PPW/Mod-Organizer-2"
-			TITLE="${PROGNAME}-Open-Mod-Organizer2"
-			pollWinRes "$TITLE"
+		setShowPic
+		"$YAD" --f1-action="$F1ACTION" --image "$SHOWPIC" --image-on-top --window-icon="$STLICON" --form --center --on-top "$WINDECO" \
+		--title="$TITLE" \
+		--text="$(spanFont "$SGNAID - $GUI_ASKMO2" "H")" \
+		--button="$BUT_MO2_GUI":0 \
+		--button="$BUT_MO2_SIL":4 \
+		--button="$BUT_MO2_SKIP":6 \
+		--timeout="$WAITMO2" \
+		--timeout-indicator=top \
+		"$GEOM"
 
-			setShowPic
-			"$YAD" --f1-action="$F1ACTION" --image "$SHOWPIC" --image-on-top --window-icon="$STLICON" --form --center --on-top "$WINDECO" \
-			--title="$TITLE" \
-			--text="$(spanFont "$SGNAID - $GUI_ASKMO2" "H")" \
-			--button="$BUT_MO2_GUI":0 \
-			--button="$BUT_MO2_SKIP":6 \
-			--timeout="$WAITMO2" \
-			--timeout-indicator=top \
-			"$GEOM"
-
-			case $? in
-				0)  {
-						writelog "INFO" "${FUNCNAME[0]} - Selected to start $MO with gui"
-						MO2MODE="gui"
-					}
-				;;
-				4)  {
-						writelog "INFO" "${FUNCNAME[0]} - Selected to start $MO with mods silently -- defaulting to gui since silent mode is not implemented"
-						MO2MODE="gui"
-					}
-				;;
-				6)  {
-						writelog "INFO" "${FUNCNAME[0]} - Selected CANCEL - Not starting $MO at all"
-						MO2MODE="disabled"
-					}
-				;;
-				70) {
-						writelog "INFO" "${FUNCNAME[0]} - TIMEOUT - Starting $MO2 gui" # with mods silently"
-						MO2MODE="gui"
-					}
-				;;
-			esac
-		else
-			writelog "INFO" "${FUNCNAME[0]} - $MO Requester was skipped because WAITMO2 is '$WAITMO2' - not changing MO2MODE '$MO2MODE'"
-		fi
-		prepareMO2 "$AID" "$MO2MODE"
-		if [ "$MO2MODE" != "disabled" ] && [ "$USECUSTOMCMD" -eq 1 ]; then
-			writelog "INFO" "${FUNCNAME[0]} - Disabling custom command, because $MO2 is enabled"
-			USECUSTOMCMD=0
-		fi
+		case $? in
+			0)  {
+					writelog "INFO" "${FUNCNAME[0]} - Selected to start $MO with gui"
+					MO2MODE="gui"
+				}
+			;;
+			4)  {
+					writelog "INFO" "${FUNCNAME[0]} - Selected to start $MO with mods silently"
+					MO2MODE="silent"
+				}
+			;;
+			6)  {
+					writelog "INFO" "${FUNCNAME[0]} - Selected CANCEL - Not starting $MO at all"
+					MO2MODE="disabled"
+				}
+			;;
+			70) {
+					writelog "INFO" "${FUNCNAME[0]} - TIMEOUT - Starting $MO2 with default ModOrganizer 2 mode" # with mods silently"
+				}
+			;;
+		esac
 	else
-		writelog "WARN" "${FUNCNAME[0]} - Unknown MO2MODE value '$MO2MODE' -- This is safe as checkMO2 has been skipped, but it is still unusual"
+		writelog "INFO" "${FUNCNAME[0]} - $MO Requester was skipped because WAITMO2 is '$WAITMO2' - not changing MO2MODE '$MO2MODE'"
+	fi
+
+	prepareMO2 "$AID" "$MO2MODE"
+	if [ "$MO2MODE" != "disabled" ] && [ "$USECUSTOMCMD" -eq 1 ]; then
+		writelog "INFO" "${FUNCNAME[0]} - Disabling custom command, because $MO2 is enabled"
+		USECUSTOMCMD=0
 	fi
 }
 
@@ -18158,7 +18395,8 @@ function setYadBin {
 		fi
 
 	elif [ "$1" == "ai" ] || [ "$1" == "appimage" ]; then
-		YADSTLIMAGE="Yad-8418e37-x86_64.AppImage"
+		# YADSTLIMAGE="Yad-8418e37-x86_64.AppImage"
+		YADSTLIMAGE="Yad-13.0-x86_64.AppImage"
 		YAIDL="$YAIURL/$YADSTLIMAGE/$YADSTLIMAGE"
 		YADAPPIMAGE="$YADSTLIMAGE"
 		DLCHK="sha512sum"
@@ -18183,7 +18421,7 @@ function setYadBin {
 				export ONSTEAMDECK=1
 				YADAIDLDIR="$STLSDPATH"
 				YAIDST="$YADAIDLDIR/$YADAPPIMAGE"
-				YAIURL="$GHURL/sonic2kk/steamtinkerlaunch-tweaks/releases/download"  # TODO isn't this already defined in URLs with the same namd and path?
+				YAIURL="$GHURL/sonic2kk/steamtinkerlaunch-tweaks/releases/download"
 				YAIDL="$YAIURL/$YADSTLIMAGE/$YADSTLIMAGE"
 				YADAPPIMAGE="$YADSTLIMAGE"
 
@@ -18319,8 +18557,8 @@ function checkIntDeps {
 			writelog "ERROR" "${FUNCNAME[0]} - Yad dependency ('$YAD') was not found! Check '${PROGCMD} --help' for alternatives and/or read '$PROJECTPAGE/wiki/Yad'" "E"
 			notiShow "$(strFix "$NOTY_NOTFOUND" "$YAD")"
 		fi
-		
-		
+
+
 		if [ ! -x "$(command -v "steam")" ] && [ "$INFLATPAK" -eq 0 ]; then
 			DEPSMISSING=1
 			echo "ERROR" "Steam not found"
@@ -19174,7 +19412,8 @@ function getProtonDBRating {
 }
 
 function fixProtonVersionMismatch {
-	if [ "$ISGAME" -eq 2 ]; then
+	FORCEPROTONMISMATCHRESOLVE="${3:-0}"  # I.e. passed by One-Time Run where "ISGAME -eq 3"
+	if [ "$ISGAME" -eq 2 ] || [ "$FORCEPROTONMISMATCHRESOLVE" -eq 1 ]; then
 		ORGPROTCAT="$1"
 		MIMAPROT="${!1}"
 
@@ -19741,21 +19980,36 @@ function updateMO2GlobConf {
 	{
 		echo "GMO2EXE=\"$MO2EXE\""
 		echo "RUNPROTON=\"$MO2RUNPROT\""
+		echo "MO2PFX=\"$MO2PFX\""
+		echo "MO2WINE=\"$MO2WINE\""
+		echo "MO2INST=\"$MO2INST\""
 		echo "STEAM_COMPAT_CLIENT_INSTALL_PATH=\"$STEAM_COMPAT_CLIENT_INSTALL_PATH\""
 		echo "STEAM_COMPAT_DATA_PATH=\"$MO2CODA\""
 	} > "$MYGLOBDLDAT"
+	echo "global" > "$LAMOINST"
 }
 
 function updateMO2PortConf {
 	MONGURL="$(grep -i "\"$MO2GAM\"" "$MO2GAMES" | head -n1 | cut -d ';' -f4)"
 	MONGURL="${MONGURL//\"}"
 
+	if [ -z "${MONGURL}" ]; then
+		# Fall back to AID if MO2GAM couldn't be found
+		if [ -n "$AID" ]; then
+			MONGURL="$(grep -i "\"$AID\"" "$MO2GAMES" | head -n1 | cut -d ';' -f4)"
+			MONGURL="${MONGURL//\"}"
+			if [ -z "${MONGURL}" ]; then
+				writelog "WARN" "${FUNCNAME[0]} - extracting the gamename MONGURL from '$MO2GAMES' by looking for '$MO2GAM' or '$AID' failed - the file '$MYPORTDLDAT' won't be found"
+				return
+			fi
+		else
+			writelog "WARN" "${FUNCNAME[0]} - extracting the gamename MONGURL from '$MO2GAMES' by looking for '$MO2GAM' failed - the file '$MYPORTDLDAT' won't be found (and no AID to fall back to)"
+			return
+		fi
+	fi
+
 	mkProjDir "$STLMO2DLDATDIR"
 	MYPORTDLDAT="${STLMO2DLDATDIR}/${MONGURL}.conf"
-
-	if [ -z "${MONGURL}" ]; then
-		writelog "WARN" "${FUNCNAME[0]} - extracting the gamename MONGURL from '$MO2GAMES' by looking for '$MO2GAM' failed - the file '$MYPORTDLDAT' won't be found"
-	fi
 
 	writelog "INFO" "${FUNCNAME[0]} - Updating '$MYPORTDLDAT' with up to date data"
 
@@ -19768,6 +20022,7 @@ function updateMO2PortConf {
 		echo "STEAM_COMPAT_CLIENT_INSTALL_PATH=\"$STEAM_COMPAT_CLIENT_INSTALL_PATH\""
 		echo "STEAM_COMPAT_DATA_PATH=\"$STEAM_COMPAT_DATA_PATH\""
 	} > "$MYPORTDLDAT"
+	echo "portable" > "$LAMOINST"
 }
 
 function prepMO2 {
@@ -19801,29 +20056,45 @@ function prepMO2 {
 			GMO2EXE="$GPFX/$MOERPATH"
 		fi
 
-# silent mode doesn't work, feel free to create a PR
 		if [ "$MO2MODE" == "silent" ]; then
+			setMO2Vars
+			MO2GAMIN1="$(grep -m1 "\"$AID\"" "$MO2GAMES" | cut -d ';' -f3)"
+			MO2GAMINI="${MO2GAMIN1//\"}"
 
-MO2MODE="gui"
-
-function disabledWIPSilentMode {
-			if [ -n "$MO2GAM" ] && [ -f "$MO2EXE" ]; then
+			if [ -n "$MO2GAMINI" ] && [ -f "$MO2EXE" ]; then
 				if [ "$(grep -c "^+" "$MODLIST")" -eq 0 ]; then
 					writelog "SKIP" "${FUNCNAME[0]} - Not starting $MO silent as requested, because no mod is enabled in '$MODLIST'"
 					notiShow "$(strFix "$NOTY_NOMO" "$GN" "$AID")"
 					MO2MODE="gui"
 				else
-					# both seem to work:
-					RUNCMD=("${RUNCMD[@]}" "$GMO2EXE" "moshortcut://$MO2GAM:$MO2GAMINI" "-p" "Default")
+					MO2SILENTMODERUN="$MO2GAMINI"  # Executable profile to use in silent mode, defaults to INI but can be overridden
+
+					# Check if MO2 Silent Mode executable has been overwritten
+					if [ -n "$MO2SILENTMODEEXEOVERRIDE" ] && [ "$MO2SILENTMODEEXEOVERRIDE" != "$NON" ]; then
+						writelog "INFO" "${FUNCNAME[0]} - Overridding ModOrganizer 2 Silent Mode shortcut with '$MO2SILENTMODEEXEOVERRIDE' because it is defined and is not '$NON'"
+						MO2SILENTMODERUN="$MO2SILENTMODEEXEOVERRIDE"
+					fi
+
+					# Run MO2 EXE with 'moshortcut://:' in for Silent Mode, as this will run a given Executable Profile
+					# This defaults to the Executable profile that matches the INI filename. We infer this from mo2games.txt
+					#
+					# For example, 'Oblivion' will always have 'Oblivion.ini' because we make sure we name the entries in mo2games.txt correctly,
+					# and MO2 will always create an Executable profile for *just* the game without its launcher (in this case, 'Oblivion'), so we can assume
+					# the INI name will always have a corresponding Executable profile (unless manually removed by the user, and in such a case, the override option allows them to fix that)
+					#
+					# Some games (like Skyrim Special Edition) may need to use another executable profile, like SKSE64, so a user can override this value and the command
+					# would become 'moshortcut://:SKSE64'
+					#
+					# If a given executable name is invalid, ModOrganizer 2 will show an error dialog stating so and will exit
+					RUNCMD=("${RUNCMD[@]}" "$MO2EXE" "moshortcut://:$MO2SILENTMODERUN")
 
 					writelog "INFO" "${FUNCNAME[0]} - Starting '$SGNAID' with $MO enabled mods with command '${RUNCMD[*]}'"
 					notiShow "$(strFix "$NOTY_STARTSIMO" "$GN" "$AID")"
 				fi
 			else
-				writelog "SKIP" "${FUNCNAME[0]} - Not starting $MO silent as requested, because MO2GAM ('$MO2GAM') or MO2EXE ('$MO2EXE') is empty"
+				writelog "SKIP" "${FUNCNAME[0]} - Not starting $MO silent as requested, because MO2GAMINI ('$MO2GAMINI') or MO2EXE ('$MO2EXE') is empty"
 				MO2MODE="gui"
 			fi
-}
 		fi
 
 		if [ "$MO2MODE" == "gui" ]; then
@@ -20145,7 +20416,8 @@ function fixCustomMeta {
 }
 
 function initPlay {
-	HAVESLR=0
+	# HAVESLR=0  # Previously enabled to force disable SLR from launch command, but now we can handle SLR from launch command and safely ignore it if not present
+	## TODO: Are any of these other values still needed?
 	HAVESLRCT=0
 	HAVEREAP=0
 	HAVESCTP=0
@@ -21092,7 +21364,7 @@ function setSLRReap {
 
 	# These variables are only passed for Non-Game SLR launches i.e. Vortex, they are ignored for game launches and use fallback values
 	OVERRIDESLR="$1"  # Always get SLR, ignoring other vars that specify otherwise
-	SLRFORCEPROTON="${2:-0}"  # Force fetch the Proton SLR ignoring value of ISGAME
+	SLRFORCETYPE="${2:-0}"  # Force fetch the Proton SLR (1), or native SLR (2), ignoring value of ISGAME
 	SLRPROTONVER="$3"  # Proton version to fetch the SLR version from (where to find the toolmanifest.vdf from) -- Optional, will fall back to RUNPROTON set by game
 
 	# Allow overriding USESLR/HAVESLR and forcing to fetch the SLR anyway (used for times when SLR is needed outside of regular game launch e.g. Vortex)
@@ -21110,19 +21382,38 @@ function setSLRReap {
 
 	# USESLR tells whether the user has chosen to get the SLR, HAVESLR refers to the legacy check for the SLR passed from the compat tool/Steam launch command
 	if [[ ( -n "$USESLR" && -n "$HAVESLR" ) || -n "$OVERRIDESLR" ]]; then
-
-		# Legacy SLR fetching (from Steam start command)
+		# SLR fetching from Steam start command
 		# --------------
-		# This is very legacy and won't happen anymore outside of very old compat tools
-		if [ "$HAVESLRCT" -eq 1 ] && [ "$USESLR" -eq 1 ]; then
+		# Sometimes the SLR comes from the compatibility tool (hence SLRCT, SLR Compat Tool) -- This only happens with Proton <= 4.11, and more critically, with games that are using
+		# a Steam Linux Runtime compatibility tool. Some games, like CS2, have an SLR forced by Valve Testing and this cannot be disabled by the user
+		#
+		# In this case, we want to take the SLR given to us by the compatibility tool and use that
+		# HAVESLRCT=1 will only be true if the SLR is coming from the compatibility tool
+		if [ "$HAVESLRCT" -eq 1 ] && [ "$USESLR" -eq 1 ] && [ "$IGNORECOMPATSLR" -eq 0 ]; then
 			writelog "INFO" "${FUNCNAME[0]} - ## SLR is enabled via USESLR=$USESLR - prepending SLR from Compatibility Tool to the current launch command"
+			writelog "INFO" "${FUNCNAME[0]} - ## This can happen if a game is running with a Steam Linux Runtime compatibility tool enabled"
 			SLRCMD=("${RUNSLRCT[@]}")
-		fi
-
-		# This is very legacy as well, same as above but for native games
-		if [ "$HAVESLR" -eq 1 ] && [ "$USESLR" -eq 1 ]; then
+			writelog "INFO" "${FUNCNAME[0]} - RUNSLRCT is '${RUNSLRCT[*]}'"
+		# This is very, very legacy and will likely never happen again
+		# While the above case covers games that get their SLR from the compatibility tool (only old Proton versions, and any native game using SLR 1.0 or 3.0),
+		# this case covers *regular native games* that pass the SLR in their start command, which should not happen anymore
+		#
+		# The reason we use an 'elif' is because games should only meet one of these conditions:
+		# - SLR comes from the selected compatibility tool (e.g. if a user selects SLR 1.0 for a native game, or if one is selected for them)
+		# - SLR comes from the game start command even if no compat tool is used (should not happen anymore, legacy Steam behaviour)
+		# - SLR is not given to us *at all*, so we use the SLR fetching below
+		elif [ "$HAVESLR" -eq 1 ] && [ "$USESLR" -eq 1 ] && [ "$IGNORECOMPATSLR" -eq 0 ]; then
 			writelog "INFO" "${FUNCNAME[0]} - ## SLR is enabled via USESLR=$USESLR - prepending SLR from command line to the current launch command"
+			writelog "INFO" "${FUNCNAME[0]} - RUNSLR is '${RUNSLR[*]}'"
 			SLRCMD=("${RUNSLR[@]}")
+		# If the user enables "IGNORECOMPATSLR", disable HAVESLR so that the below logic for Pressure Vessel Funtime will kick in and fetch the SLR manually
+		# HAVESLR controls whether we Have an SLR coming from the incoming command line options, which is nowadays only really the case for native titles with a Compat Tool forced/selected by Valve Testing
+		elif [ "$HAVESLRCT" -eq 1 ] && [ "$USESLR" -eq 1 ] && [ "$IGNORECOMPATSLR" -eq 1 ]; then
+			writelog "INFO" "${FUNCNAME[0]} - ## SLR was found in incoming Start Command, likely from a compatibility tool, but 'IGNORECOMPATSLR' is '${IGNORECOMPATSLR}'"
+			writelog "INFO" "${FUNCNAME[0]} - ## Ignoring this incoming SLR from the selected Steam Linux Runtime Compatibility Tool and instead letting SteamTinkerLaunch find the Steam Linux Runtime instead"
+			writelog "WARN" "${FUNCNAME[0]} - ## Note that some games require a specific Steam Linux Runtime version, and if a given Steam Linux Runtime version that SteamTinkerLaunch looks for is not found, or if the version found does not match what a game might require, launching may fail"
+
+			HAVESLR=0
 		fi
 
 		# Legacy case to ignore SLR gotten from commandline
@@ -21131,8 +21422,9 @@ function setSLRReap {
 		fi
 		# --------------
 
-		# Modern SLR fetching (from toolmanifest.vdf / native Linux SLR AppID)
+		# SLR fetching (from toolmanifest.vdf / native Linux SLR AppID)
 		# ---------------
+		# TODO This could probably be refactored to have less indentation and return early...
 		RUNFORCESLR=0
 		if [[ ( "$HAVESLR" -eq 0 && "$USESLR" -eq 1 ) || -n "$OVERRIDESLR" ]]; then
 			if [ -n "$LASTSLR" ] && [ -f "${LASTSLR% --verb*}" ] && [ "$FORCESLR" -eq 1 ]; then
@@ -21154,7 +21446,8 @@ function setSLRReap {
 				# Pressure Vessel Funtime 2nd Edition Ver. 2.31
 				writelog "INFO" "${FUNCNAME[0]} - Now executing Pressure Vessel Funtime 2nd Edition Ver. 2.31"
 				# Get SLR Paths
-				if [ "$ISGAME" -eq 3 ] && [ "$SLRFORCEPROTON" -eq 0 ]; then  # ISGAME -eq 3 is always true for running outside of Steam eg One-Time Run...
+				# Use native SLR: if ( ( game is native AND NOT forcing Proton ) OR forcing native )
+				if [[ ( "$ISGAME" -eq 3 && "$SLRFORCETYPE" -eq 0 ) || "$SLRFORCETYPE" -eq 2 ]]; then
 					# Native games already have a hardcoded initial native SLR AppID, so we can get the path from this hardcoded AppID
 					# However they need to get the required "nested" SLR from the toolmanifest from the hardcoded native SLR - This is the SLR that the regular native SLR runs inside of
 					# This nested AppID is stored in the hardcoded SLR's toolmanifest
@@ -21564,6 +21857,8 @@ function launchSteamGame {
 
 	writelog "INFO" "${FUNCNAME[0]} - Initial game command is '${INGCMD[*]}'"
 
+	# Refetch SLR, in case we set it for custom command as well
+	# i.e. custom command could use native SLR, but we might want to use Proton SLR for the game, or vice versa
 	unset "${SLRCMD[@]}"
 	setSLRReap
 
@@ -22079,16 +22374,18 @@ function howto {
 	echo "                                      Note that this will not remove your mods or installed Winetricks"
 	echo "    lang=<option>                    Mostly to get translated configs on inital setup."
 	echo "                                      <option> can be a language file name without suffix or an path to a valid language file"
- 	echo "    launcher <args>                  Start the Game Launcher"
+    echo "    launcher <args>                  Start the Game Launcher"
 	echo "             COLLECTION                Show only installed games from Steam collection COLLECTION"
 	echo "             menu                      Open Steam Collection Menu"
 	echo "             last                      Open last Game as 'Menu'"
 	echo "             auto                      Create/Download data for all installed games first"
 	echo "             update                    ReCreate all Collection Menus"
 	echo "                                       Can be combined with auto"
-	echo "    list <owned|installed>           List ids of <owned|o,installed|i> games"
+	echo "    list <owned|installed|non-steam>   List info on <owned|o,installed|i,non-steam|nsg> games"
 	echo "         <id|name|path|count|full>     Optionally specify whether you want to see"
 	echo "                                        each game's <id|name|path|count|full>"
+	echo "                                       NOTE: Non-Steam Games will NOT be included in <installed,owned>,"
+	echo "                                        they will only show up for <non-steam|nsg>"
 	echo "    listproton|lp                    List name and path of all Proton versions known to SteamTinkerLaunch"
 	echo "         name|n                        Only list the Proton version names"
 	echo "         path|p                        Only list paths to the Proton versions"
@@ -22115,7 +22412,7 @@ function howto {
 	echo "                                       such as Proton version where possible."
 	echo "         <args>:"
 	echo "         --exe=                        Absolute path to the One-Time executable (can be Windows or Linux executable)"
-	echo "         --proton=                     Name of the Proton version to use (see steamtinkerlaunch lp), ignored if not Windows executable"
+	echo "         --proton=                     Name of the Proton version to use (see steamtinkerlaunch lp). Defaults to Per-Game Proton version ('USEPROTON'), ignored if not Windows executable"
 	echo "         --workingdir=                 Working directory to launch the executable from"
 	echo "         --useexedir                   Use the same directory as the executable as the working directory (overrides --workingdir)"
 	echo "         --args=                       Arguments to append to the end of the executable launch"
@@ -22438,8 +22735,14 @@ function commandline {
 		fetchGameSLRGui "$2"
 	elif [ "$1" == "debug" ]; then
 		## Why are you looking here? :-)
+		DEBUGNOSTAID="-222353304"
 
-		# Don't let the user run the internal debug command
+		### This part of debug is for testing updating the JSON blob in the localconfig VDF
+		### that holds information about which Collections a non-steam game is using
+		###
+		### It may also be some now-outdated testing for localconfig.vdf parsing
+
+		# # Don't let the user run the internal debug command
 		writelog "WARN" "${FUNCNAME[0]} - No debug for you!"
 		echo "No debug for you!"
 		return
@@ -22541,7 +22844,7 @@ function commandline {
 					writelog "INFO" "${FUNCNAME[0]} - URL passed is '$3'"
 					dlMod2nexurl "$3"
 				fi
-			elif [ "$2" == "getpfx" ] || [ "$2" == "gp" ]; then
+			elif [ "$2" == "getprefix" ] || [ "$2" == "gp" ]; then
 				echo "$MO2COMPDATA/pfx"
 			elif [ "$2" == "repairpfx" ]; then
 				setMO2Vars
@@ -23643,6 +23946,7 @@ function safequoteVdfBlockName {
 }
 
 ## Use sed to grab a section of a given VDF file based on its indentation level
+## TODO check if ENDPATTERN actually works?
 function getVdfSection {
     STARTPATTERN="$( safequoteVdfBlockName "$1" )"
     ENDPATTERN="${2:-\}}"  # Default end pattern to end of block
@@ -23654,18 +23958,26 @@ function getVdfSection {
         INDENT="$(( $( guessVdfIndent "$STARTPATTERN" "$VDF" ) ))"
     fi
 
-    INDENTSTR="$( generateVdfIndentString "$INDENT" "[[:space:]]" )"
-    INDENTEDSTARTPATTERN="${INDENTSTR}${STARTPATTERN}"
+	# Only generate indent string if given tab length > 0
+	# Allows for parsing top-level VDF section i.e. "UserLocalConfigStore" in localconfig.vdf
+	INDENTSTR=""
+	if [ "$INDENT" -gt 0 ]; then
+		INDENTSTR="$( generateVdfIndentString "$INDENT" "[[:space:]]" )"
+    else
+		writelog "INFO" "${FUNCNAME[0]} - Indent is 0 ($INDENT)"
+	fi
+	INDENTEDSTARTPATTERN="${INDENTSTR}${STARTPATTERN}"
     INDENTEDENDPATTERN="${INDENTSTR}${ENDPATTERN}"
 
 	writelog "INFO" "${FUNCNAME[0]} - Searching for VDF block with name '$STARTPATTERN' in VDF file '$VDF'"
+	writelog "INFO" "${FUNCNAME[0]} - Start pattern is '$INDENTEDSTARTPATTERN'"
 
 	# This is a very hacky solution to allow 'getNestedVdfSection' to use this function
 	# It needs the start pattern exact match but other functions can't use this
 	if [ -n "$STOPAFTERFIRSTMATCH" ]; then
-		sed -n "/${INDENTEDSTARTPATTERN}/I,/^${INDENTEDENDPATTERN}/I { p; /${INDENTEDENDPATTERN}/I q }" "$VDF"
+		sed -n "/^${INDENTEDSTARTPATTERN}/I,/^${INDENTEDENDPATTERN}/I { p; /${INDENTEDENDPATTERN}/I q }" "$VDF"
 	else
-		sed -n "/${INDENTEDSTARTPATTERN}/I,/^${INDENTEDENDPATTERN}/I p" "$VDF"
+		sed -n "/^${INDENTEDSTARTPATTERN}/I,/^${INDENTEDENDPATTERN}/I p" "$VDF"
 	fi
 }
 
@@ -23674,21 +23986,30 @@ function getVdfSection {
 function checkVdfSectionAlreadyExists {
     SEARCHBLOCK="$( safequoteVdfBlockName "${1:-\"}" )"  # Default to the first quotation, should be the start VDF file
     BLOCKNAME="$( safequoteVdfBlockName "$2" )"  # Block name to  search for
-    VDF="$3"
+	VDF="$3"
+	INDENT="$4"  # Optional to check from
+
+	# Only set block indent if we gave an indent initally, otherwise use empty string so getVdfSection will ignore indent
+	if [ -n "$INDENT" ]; then
+		BLOCKINDENT="$(( INDENT + 1 ))"
+	else
+		BLOCKINDENT=""
+	fi
 
     if [ -z "$BLOCKNAME" ]; then
 		writelog "ERROR" "${FUNCNAME[0]} - BLOCKNAME was not provided, skipping..."
         return
     fi
 
-    SEARCHBLOCKVDFSECTION="$( getVdfSection "$SEARCHBLOCK" "" "" "$VDF" )"
+    SEARCHBLOCKVDFSECTION="$( getVdfSection "$SEARCHBLOCK" "" "$INDENT" "$VDF" )"
     if [ -z "$SEARCHBLOCKVDFSECTION" ]; then
 		writelog "WARN" "${FUNCNAME[0]} - Could not find VDF section with name '$SEARCHBLOCK' in VDF file '$VDF' -- Skipping"
         return 0
     fi
 
+	# Need to pass Indent + 1 because the block we're searching for is 1 deeper, i.e. searching "CompatToolMapping", the AppID key will be 1 indent deeper
     printf "%s" "$SEARCHBLOCKVDFSECTION" > "/tmp/tmp.vdf"
-    getVdfSection "$BLOCKNAME" "" "" "/tmp/tmp.vdf" | grep -iq "$BLOCKNAME"
+    getVdfSection "$BLOCKNAME" "" "$BLOCKINDENT" "/tmp/tmp.vdf" | grep -iq "$BLOCKNAME"
 }
 
 function getNestedVdfSection {
@@ -23733,10 +24054,31 @@ function createVdfEntry {
     PARENTBLOCKNAME="$( safequoteVdfBlockName "$2" )"  # Block to start from, e.g. "CompatToolMapping"
     NEWBLOCKNAME="$( safequoteVdfBlockName "$3" )"  # Name of new block, e.g. "<AppID>"
     POSITION="${4:-bottom}"  # POSITION to insert into, can be either top/bottom -- Bottom by default
+	INDENT="$5"  # Indent that PARENTBLOCKNAME is at (0 = top of file)
+	CHECKDUPLICATES="${6:-1}"  # Flag to check for duplicate section names
 
-    ## Ensure no duplicates are written out
-    if checkVdfSectionAlreadyExists "$PARENTBLOCKNAME" "$NEWBLOCKNAME" "$VDF"; then
-        # echo "Block already exists, skipping..."
+	# If no indent is given, guess the indent, otherwise use the specified one
+	# -------
+	# BASETABAMOUNT = Indent for the start of the new section, i.e. one indent in from the parent block
+	# BLOCKTABAMOUNT = Indent for the block inside of the section
+	#
+	# Ex: With CompatToolMapping, BASETABAMOUNT represents the indent for the AppID, such as "22300"
+	#                             BLOCKTABAMOUNT represents the indent for the contents of the block under this name
+	# -------
+	if [ -z "$INDENT" ]; then
+		## Calculate indents for new block (one more than PARENTBLOCKNAME indent)
+		BASETABAMOUNT="$(( $( guessVdfIndent "${PARENTBLOCKNAME}" "$VDF" ) + 1 ))"
+		writelog "INFO" "${FUNCNAME[0]} - Guessed BASETABAMOUNT='${BASETABAMOUNT}'"
+	else
+		BASETABAMOUNT="$INDENT"
+	fi
+
+	# Indents for PARENTBLOCK
+	BLOCKTABAMOUNT="$(( BASETABAMOUNT + 1 ))"
+	PARENTBLOCKTABAMOUNT="$(( BASETABAMOUNT - 1 ))"
+
+    ## Ensure no duplicates are written out (duplicate names can exist at different indent levels)
+    if [ "$CHECKDUPLICATES" -eq 1 ] && checkVdfSectionAlreadyExists "$PARENTBLOCKNAME" "$NEWBLOCKNAME" "$VDF" "$PARENTBLOCKTABAMOUNT"; then
 		writelog "SKIP" "${FUNCNAME[0]} - Block '$NEWBLOCKNAME' already exists in parent block '$PARENTBLOCKNAME' - Skipping"
         return
     fi
@@ -23744,23 +24086,50 @@ function createVdfEntry {
 	writelog "INFO" "${FUNCNAME[0]} - Creating VDF data block to append to '$PARENTBLOCKNAME'"
 
     ## Create array from args, skip first four to get array of key/value pairs for VDF block
-    NEWBLOCKVALUES=("${@:5}")
+    NEWBLOCKVALUES=("${@:7}")
+	writelog "INFO" "${FUNCNAME[0]} - NEWBLOCKVALUES are ${NEWBLOCKVALUES[*]}"
+
     NEWBLOCKVALUESDELIM="!"
 
-    ## Calculate indents for new block (one more than PARENTBLOCKNAME indent)
-    BASETABAMOUNT="$(( $( guessVdfIndent "${PARENTBLOCKNAME}" "$VDF" ) + 1 ))"
-    BLOCKTABAMOUNT="$(( BASETABAMOUNT + 1 ))"
-
     ## Tab amounts represented as string
+    PARENTBLOCKTABSTR="$( generateVdfIndentString "$PARENTBLOCKTABAMOUNT" )"
     BASETABSTR="$( generateVdfIndentString "$BASETABAMOUNT" )"
     BLOCKTABSTR="$( generateVdfIndentString "$BLOCKTABAMOUNT" )"
 
-    ## Calculations for line numbers
-    PARENTBLOCKLENGTH="$( getVdfSection "$PARENTBLOCKNAME" "" "" "$VDF" | wc -l )"
-    BLOCKLINESTART="$( grep -in "${PARENTBLOCKNAME}" "$VDF" | cut -d ':' -f1 | xargs )"
+	writelog "INFO" "${FUNCNAME[0]} - PARENTBLOCKTABAMOUNT is '$PARENTBLOCKTABAMOUNT'"
+	writelog "INFO" "${FUNCNAME[0]} - BASETABSTR is '$BASETABSTR'"
+	writelog "INFO" "${FUNCNAME[0]} - BLOCKTABSTR is '$BLOCKTABSTR'"
 
-    TOPOFBLOCK="$(( BLOCKLINESTART + 1 ))"
-    BOTTOMOFBLOCK="$(( BLOCKLINESTART + PARENTBLOCKLENGTH - 2 ))"
+	writelog "INFO" "${FUNCNAME[0]} - Grep is '^${BASETABSTR}${PARENTBLOCKNAME}'"
+
+    ## Calculations for line numbers
+    ## PARENTBLOCKLENGTH is 1 line too short
+	PARENTBLOCKLENGTH="$( getVdfSection "$PARENTBLOCKNAME" "" "$INDENT" "$VDF" | wc -l )"
+	PARENTBLOCKLENGTH="$(( PARENTBLOCKLENGTH + 1 ))"
+
+    BLOCKLINESTART="$( grep -Pin -- "^${PARENTBLOCKTABSTR}${PARENTBLOCKNAME}" "$VDF" | head -n1 | cut -d ':' -f1 | xargs )"
+    TOPOFBLOCK="$(( BLOCKLINESTART + 2 ))"
+	writelog "INFO" "${FUNCNAME[0]} - BLOCKLINESTART is '$BLOCKLINESTART'"
+
+	# HACK: If parent block indent is -1, we can assume this means we want to add this VDF entry as the LAST block in the file
+	#       If we want to add a block to the end of the file, we only need to move up 2 lines (last line is always blank)
+	#       But if we're not at the end of the file we can assume we need to move up 3 lines (to account for the block/entry FOLLOWING the block we want to add)
+	#
+	#      For appending to the end of the VDF file, we want to start appending at the line that has the last closing brace (since the last line is blank, going up 2 lines gives us the line with the ending brace)
+	#      For appending in any other case, we assume we have to move up 3 lines
+	#
+	#     To fix this we assume a default line offset of 3, but if PARENTBLOCKTABAMOUNT is 1, then we set the line offset to 2
+	#     These are basically magic numbers discovered by trial and error, and a fix to make the logic more consistent is welcome
+	BOTTOMOFBLOCKOFFSET=3
+	if [ "$PARENTBLOCKTABAMOUNT" -eq -1 ]; then
+		BOTTOMOFBLOCKOFFSET=2
+	fi
+
+    BOTTOMOFBLOCK="$(( BLOCKLINESTART + PARENTBLOCKLENGTH - BOTTOMOFBLOCKOFFSET ))"
+
+	writelog "INFO" "${FUNCNAME[0]} - PARENTBLOCKLENGTH is '${PARENTBLOCKLENGTH}' lines"
+	writelog "INFO" "${FUNCNAME[0]} - TOPOFBLOCK is line '${TOPOFBLOCK}'"
+	writelog "INFO" "${FUNCNAME[0]} - BOTTOMOFBLOCK is line '${BOTTOMOFBLOCK}'"
 
     ## Decide which line to insert new block into (uses if/else for ease of logging)
     if [[ "${POSITION,,}" == "top" ]]; then
@@ -23813,7 +24182,6 @@ function editVdfSectionValue {
 	UPDATEDVDFSECTION="$( echo "${VDFSECTION}"| sed "s/${VDFPROPERTYORGVAL}/${VDFPROPERTYNEWVAL}/g" )"
 
 	backupVdfFile "$VDF"
-
 	substituteVdfSection "$VDFSECTION" "$UPDATEDVDFSECTION" "$VDF"
 }
 
@@ -23905,6 +24273,60 @@ function getGlobalSteamCompatToolInternalName {
 		writelog "SKIP" "${FUNCNAME[0]} - Could not find CompatToolMapping section in '$CFGVDF' - Giving up"
 	fi
 }
+
+function updateLocalConfigAppsValue {
+	# Add key for specific AppID to localconfig.vdf's Apps section, creating the initial 'Apps' section if it doesn't exist
+	# Used to set AllowOverlay and OpenVR when adding Non-Steam Games
+	# Note that this may need reworked when we allow the user to select their Steam user
+
+	LCVAID="$1"  # AppID for section name, i.e. '"-1123145"' (must be signed 32bit integer)
+	LCVKEYNAME="$2"  # Key to write into section, i.e. '"OverlayAppEnable"'
+	LCVKEYVAL="$3"  # Value to assign to key, i.e. '"1"'
+
+	# This part in particular may need reworked if/when we add the option to select a Steam User
+	if [ ! -f "$FLCV" ]; then
+		writelog "WARN" "${FUNCNAME[0]} - No localconfig.vdf found at '${FLCV}' -- Nothing to do."
+		return
+	else
+		writelog "INFO" "${FUNCNAME[0]} - Using localconfig.vdf (FLCV) file at '$FLCV'"
+	fi
+
+	# Get the "Apps" section in localconfig.vdf
+	FLCVAPPSSECTION="$( getVdfSection "Apps" "" "1" "${FLCV}" )"
+	if [ -z "$FLCVAPPSSECTION" ]; then
+		writelog "INFO" "${FUNCNAME[0]} - ${FLCV} is missing 'Apps' section, creating it now"
+		createVdfEntry "${FLCV}" "UserLocalConfigStore" "Apps" "" "0" ""
+	else
+		writelog "INFO" "${FUNCNAME[0]} - localconfig.vdf already has 'Apps' section, nothing to do"
+	fi
+
+	# Next we need to check if the given AppID
+	FLCVAPPAID="$( getNestedVdfSection "Apps/${LCVAID}" "1" "$FLCV" )"
+	if ! grep -q -- "$LCVAID" <<< "$FLCVAPPAID"; then
+		# This case adds a new entry under the "Apps" section with the initial content: "LCVKEYNAME"		"LCVKEYVAL"
+		writelog "INFO" "${FUNCNAME[0]} - No existing section in 'Apps' section for AppID '${LCVAID}' with key/value pair '${LCVKEYNAME}!${LCVKEYVAL}'"
+
+		FLCVAPPAIDENTRY=( "${LCVKEYNAME}!${LCVKEYVAL}" )
+		createVdfEntry "${FLCV}" "Apps" "${LCVAID}" "" "2" "" "${FLCVAPPAIDENTRY[@]}"
+	else
+		# This case is where the "AppID" section already exists under "Apps", so we want to add the value to the section if it doesn't exist,
+		# or update the existing section
+		writelog "INFO" "${FUNCNAME[0]} - 'Apps' section already has block for AppID '${LCVAID}', checking if the key '${LCVKEYNAME}' already exists"
+
+		# Check if the "Apps/AppID" section has the given key already
+		LCVFSECTIONVAL="$( getVdfSectionValue "${FLCVAPPAID}" "${LCVKEYNAME}" "1" )"
+		writelog "INFO" "${FUNCNAME[0]} - LCVFSECTIONVAL is '$LCVFSECTIONVAL'"
+		# editVdfSectionValue "${FLCVAPPAID}" "${LCVKEYNAME}" "${LCVKEYVAL}" "${FLCV}" "1"
+		if [ -n "$LCVFSECTIONVAL" ]; then
+			writelog "INFO" "${FUNCNAME[0]} - Key '${LCVKEYNAME}' already exists in 'Apps/${LCVAID}' section, updating its value from '${LCVFSECTIONVAL}' to '${LCVKEYVAL}'"
+			editVdfSectionValue "${FLCVAPPAID}" "${LCVKEYNAME}" "${LCVKEYVAL}" "${FLCV}"
+		else
+			writelog "INFO" "${FUNCNAME[0]} - Key '${LCVKEYNAME}' does not exist in 'Apps/${LCVAID}' section, adding it now with value '${LCVKEYVAL}'"
+			addVdfSectionValue "${FLCVAPPAID}" "${LCVKEYNAME}" "${LCVKEYVAL}" "${FLCV}"
+		fi
+	fi
+}
+
 ### END TEXT-BASED VDF INTERACTION FUNCTIONS
 
 function startSettings {
@@ -24528,6 +24950,12 @@ function addNonSteamGame {
 
 		printf '\x02%s\x00%b\x00\x00\x00' "IsHidden" "\x0${NOSTHIDE:-0}"
 		printf '\x02%s\x00%b\x00\x00\x00' "AllowDesktopConfig" "\x0${NOSTADC:-0}"
+
+		# These values are now stored in localconfig.vdf under the "Apps" section,
+		# under a block using the Non-Steam Game Signed 32bit AppID. (i.e., -223056321)
+		# This is handled by `updateLocalConfigAppsValue` below
+		#
+		# Unsure if required, but still write these to the shortcuts.vdf file for consistency
 		printf '\x02%s\x00%b\x00\x00\x00' "AllowOverlay" "\x0${NOSTAO:-0}"
 		printf '\x02%s\x00%b\x00\x00\x00' "OpenVR" "\x0${NOSTVR:-0}"
 
@@ -24537,7 +24965,7 @@ function addNonSteamGame {
 		printf '\x02%s\x00\x00\x00\x00\x00' "LastPlayTime"
 		printf '\x01%s\x00\x00' "FlatpakAppID"
 		printf '\x00%s\x00' "tags"
-		splitTags "$NOSTTAGS"  # TODO tags are now stored in localconfig.vdf, see #949
+		splitTags "$NOSTTAGS"  # TODO tags are now stored in localconfig.vdf (see #949) but we still write them here anyway
 		printf '\x08\x08\x08\x08'
 	} >> "$SCPATH"
 
@@ -24552,10 +24980,16 @@ function addNonSteamGame {
 		else
 			writelog "INFO" "${FUNCNAME[0]} - Adding selected compatibility tool '$NOSTCOMPATTOOL' for Non-Steam Game"
 			NSGVDFVALS=( "name!${NOSTCOMPATTOOL}" "config!" "priority!250" )
-			createVdfEntry "$CFGVDF" "CompatToolMapping" "$NOSTAIDGRID" "" "${NSGVDFVALS[@]}"
+			createVdfEntry "$CFGVDF" "CompatToolMapping" "$NOSTAIDGRID" "" "" "" "${NSGVDFVALS[@]}"
 			writelog "INFO" "${FUNCNAME[0]} - Finished adding Non-Steam Game compatibility tool to '$CFGVDF'"
 		fi
 	fi
+
+	# Update "Apps" section in localconfig.vdf to create the section for the new Non-Steam Game and set AllowOverlay and OpenVR accordingly
+	# In future if more options are stored here we can also set them in the same way
+	writelog "INFO" "${FUNCNAME[0]} - Updating 'localconfig.vdf' to set OpenVR and AllowOverlay values, using Signed 32bit AppID '$NOSTAIDVDF'"
+	updateLocalConfigAppsValue "$NOSTAIDVDF" "OverlayAppEnable" "$NOSTAO"
+	updateLocalConfigAppsValue "$NOSTAIDVDF" "DisableLaunchInVR" "$(( 1-NOSTVR ))"  # localconfig.vdf tracks where OpenVR is DISabled rather than ENabled, so flip the boolean
 
 	writelog "INFO" "${FUNCNAME[0]} - Finished adding new $NSGA"
 	SGACOPYMETHOD=""  # Unset doesn't work for some reason with '--flag'
@@ -26482,6 +26916,7 @@ function main {
 		writelog "INFO" "${FUNCNAME[0]} - No arguments provided. See '$PROGCMD --help' for possible command line parameters" "E"
 	else
 		writelog "INFO" "${FUNCNAME[0]} - Checking command line: incoming arguments '${*}'"
+		writelog "INFO" "${FUNCNAME[0]} - Checking command line: first argument '${1}'"
 
 		if [ -n "$SteamAppId" ] && [ "$SteamAppId" -eq "0" ]; then
 			if grep -q "\"$1\"" <<< "$(sed -n "/^#STARTCMDLINE/,/^#ENDCMDLINE/p;/^#ENDCMDLINE/q" "$0" | grep if)"; then
@@ -26498,9 +26933,24 @@ function main {
 				fi
 			fi
 		elif grep -q "$SAC" <<< "$@" || grep -q "$L2EA" <<< "$@"; then
+			# We check if incoming commands contain 'steamapps/common' to interpret them as game launch commands
+			# But if $1 is a known command in this list, explicitly pass it to 'commandline' as we know it is NOT a game command
+			# This prevents commands which contain 'steamapps/common' ANYWHERE in their command (including as paths as parameters to other flags) from being interpreted as a game launch
+			#
+			# If $1 is a known steamtinkerlaunch command (with 'steamtinkerlaunch otr', $1 would be 'otr') then intervene and force this to the 'commandline' function as it is a known steamtinkerlaunch command
+			STLINCOMINGSKIPCOMMANDS="otr|onetimerun"
+
 			if grep -q "update" <<< "$@" || grep -q "^play" <<< "$@" ; then
 				commandline "$@"
+			# HACK: Since we check for steamapps/common ($SAC), commands which contain this (such as a one-time run path) will incorrectly get triggered as a game launch
+			#       As a workaround, skip interpreting a hardcoded set of commands as start parameters and pass directly to commandline (i.e. if we have 'otr' as our first option, pass down to commandline function and run otr)
+			#
+			#       We also check to make sure the first argument doesn't contain any slashes (i.e. game start commands' first argument could be a path, so it would contain a slash)
+			#       This allows us to distinguish between '/home/otr' which could be a game launch command, and the 'steamtinkerlaunch otr' command (where $1 is 'otr')
+			elif grep -qwE "${STLINCOMINGSKIPCOMMANDS}" <<< "${1}" && [[ "${1}" != *"/"* ]]; then
+				commandline "$@"
 			else
+				# If we get here, this should be an actual game start command!
 				setGameVars "$@"
 				if [ "$ISGAME" -eq 2 ] || [ "$ISGAME" -eq 3 ]; then
 					prepareLaunch
