@@ -7,7 +7,7 @@
 PREFIX="/usr"
 PROGNAME="SteamTinkerLaunch"
 NICEPROGNAME="Steam Tinker Launch"
-PROGVERS="v14.0.20240727-1"
+PROGVERS="v14.0.20241003-2"
 PROGCMD="${0##*/}"
 PROGINTERNALPROTNAME="Proton-stl"
 SHOSTL="stl"
@@ -153,7 +153,6 @@ F1ACTIONCG="bash -c setColGui"
 BTS="backup-timestamp"
 DUMMYBIN="echo"
 STLAIDSIZE="12"
-FPBIN="/app/utils/bin"
 INFLATPAK=0
 WDIB="wine-discord-ipc-bridge"
 FIXGAMESCOPE=0
@@ -218,7 +217,6 @@ STLGAMEDIR="$STLCFGDIR/gamecfgs"
 STLGUIDIR="$STLCFGDIR/guicfgs"
 STLGAMEDIRID="$STLGAMEDIR/id"
 STLCUSTVARSDIR="$STLGAMEDIR/customvars"
-GLOBCUSTVARS="$STLCUSTVARSDIR/global-custom-vars.conf"
 STLGAMEDIRTI="$STLGAMEDIR/title"
 STLCOLLECTIONDIR="$STLCFGDIR/collections"
 STLREGDIR="$STLCFGDIR/regs"
@@ -503,6 +501,7 @@ STLMENUBLOCKCFG="$STLCFGDIR/$MENUBLOCK"
 #STARTEDITORCFGLIST
 STLDEFGLOBALCFG="$STLCFGDIR/global.conf"													# global config
 STLDEFGAMECFG="$STLCFGDIR/default_template.conf"											# the default config template used to create new per game configs - will be auto created if not found
+GLOBCUSTVARS="$STLCUSTVARSDIR/global-custom-vars.conf"										# global config file for user defined custom variables
 
 function setSDCfg {
 STLSDLCFG="$STLCFGDIR/steamdeck.conf"														# Steam Deck config
@@ -2697,8 +2696,13 @@ function loadLanguage {
 	writelog "INFO" "${FUNCNAME[0]} - First load the default language '$STLDEFLANG' to make sure all variables are filled"
 	loadLangFile "$STLDEFLANG"
 
-	saveCfg "$STLDEFGLOBALCFG" X
-	loadCfg "$STLDEFGLOBALCFG" X
+	# Prevents loadLanguage from creating the global.conf too early when it may be missing values
+	# i.e. loadLanguage may be called before setSteamPaths, which can result in creating paths without the required Steam path variables set yet
+	#      This can happen with Luxtorpead, where the LUXTORPEDACMD may be written out before `setSteamPaths` has been called to set `STEAMCOMPATTOOL`
+	if [ -f "$STLDEFGLOBALCFG" ]; then
+		saveCfg "$STLDEFGLOBALCFG" X
+		loadCfg "$STLDEFGLOBALCFG" X
+	fi
 
 	writelog "INFO" "${FUNCNAME[0]} - Loading STLLANG from '$STLDEFGLOBALCFG'"
 
@@ -3142,7 +3146,7 @@ function setDefaultCfgValues {
 		if [ -z "$BOXTRONARGS" ]						; then	BOXTRONARGS="--wait-before-run"; fi
 		if [ -z "$ROBERTACMD" ]							; then	ROBERTACMD="$STEAMCOMPATOOLS/roberta/run-vm"; fi
 		if [ -z "$ROBERTAARGS" ]						; then	ROBERTAARGS="--wait-before-run"; fi
-		if [ -z "$LUXTORPEDACMD" ]						; then	LUXTORPEDACMD="$STEAMCOMPATOOLS/luxtorpeda/luxtorpeda"; fi
+		if [ -z "$LUXTORPEDACMD" ]						; then	LUXTORPEDACMD="$STEAMCOMPATOOLS/luxtorpeda/luxtorpeda.sh"; fi
 		if [ -z "$LUXTORPEDAARGS" ]						; then	LUXTORPEDAARGS="wait-before-run"; fi
 		if [ -z "$RSVERS" ]								; then	RSVERS="5.9.1"; fi
 		if [ -z "$USERSSPEKVERS" ]						; then  USERSSPEKVERS="1"; fi
@@ -7209,7 +7213,7 @@ function extProtonRun {
 		# Hopefully unsetting is safe and doesn't mean places that need the SLR will lose it from this 'unset'
 		if [ "$EXTPROTUSESLR" -eq 1 ]; then
 			writelog "INFO" "${FUNCNAME[0]} - EXTPROTUSESLR is '$EXTPROTUSESLR' -- Attempting to find and use SLR with extProtonRun"
-			
+
 			unset "${SLRCMD[@]}"
 			setSLRReap
 		fi
@@ -7783,7 +7787,7 @@ function getGameWindowPID {
 
 		return
 	fi
-	
+
 	MAXWAIT=20
 	COUNTER=0
 	TESTPID="$NON"
@@ -11295,41 +11299,67 @@ function setGameScopeVars {
 		ARGTYPE="${6,,}"  # e.g. "chk", "cb", etc (matches Yad widget types mostly)
 
 		# Set values for undefined arguments
-		if [ -z "$VAR" ]; then
-			if grep -qw "$FLAG" <<< "$ARGS"; then
-				if [[ $ARGTYPE =~ "cb" ]] || [[ $ARGTYPE =~ "num" ]]; then
-					# Get the value given to the argument as the enabled/selected value, e.g. get '2' from '-U 2' if we passed '-U'
-					tr ' ' '\n' <<< "$ARGS" | grep -wA1 "$FLAG" | tail -n1
-				elif [[ $ARGTYPE =~ "path" ]] || [[ $ARGTYPE =~ "txt" ]]; then
-					# Get value given to arguments with two dashes, like `--`
-					echo "$ARGS" | sed 's:--:\n--:g' | grep -wA1 "$FLAG" | sed "s:${UNESCAPED_FLAG}::g;s:-:\n-:g" | head -n1 | xargs
-				else
-					echo "$TRUEVAL"
-				fi
+		if [ -n "$VAR" ]; then
+			return
+		fi
+
+		# If the flag is not in the args string, return the default value for display purposes
+		if ! grep -qw "$FLAG" <<< "$ARGS"; then
+			echo "$DEFVAL"
+			return
+		fi
+
+		if [[ $ARGTYPE =~ "cb" ]] || [[ $ARGTYPE =~ "num" ]]; then
+			# Get the value given to the argument as the enabled/selected value, e.g. get '2' from '-U 2' if we passed '-U'
+			# If the value does not contain only numbers (with or without decimals) then this will be blank and we return the default value 'DEFVAL'
+			GSPARSEDARGVAL="$( tr ' ' '\n' <<< "$ARGS" | grep -wA1 "$FLAG" | tail -n1 )"
+
+			# Don't validate parsed value for combobox, this is free-text and could be anything 
+			if ! [[ $ARGTYPE =~ "num" ]]; then
+				echo "$GSPARSEDARGVAL"
+				return
+			fi
+
+			# If we get passed an invalid GameScope commandline argument where a flag that is supposed to be followed by a NUMBER is not,
+			# we could end up returning the next argument, e.g. `-s -f` would return `-s` if we didn't include the `grep -P`
+			# Using the `grep -P` we filter out potential garbage returned by the rest of the parsing.
+			#
+			# We are most likely to encounter problems without this `grep -P` when it comes to the `GSINTRES` and `GSSHWRES`,
+			# as if these are blank we end up displaying 'x'.
+			#
+			# For comboboxes that can display text, we will just have to assume we are passed a valid string, as freetext comboboxes could contain
+			# anything and we cannot/should not try to assume what is valid for them in this way.
+			# This logic only exists to filter out non-numerical values for flags which expect to be given a numerical argument
+			#
+			# For more background, see: https://github.com/sonic2kk/steamtinkerlaunch/pull/1152#issuecomment-2316286429
+			GSPARSEDARGNUMVAL="$( echo "${GSPARSEDARGVAL}" | grep -P "^([\d]+)(?:\.([\d]{1,2}?))?$" )"
+			if [ -n "${GSPARSEDARGNUMVAL}" ]; then
+				echo "$GSPARSEDARGNUMVAL"
 			else
 				echo "$DEFVAL"
 			fi
+		elif [[ $ARGTYPE =~ "path" ]] || [[ $ARGTYPE =~ "txt" ]]; then
+			# Get value given to arguments with two dashes, like `--`
+			echo "$ARGS" | sed 's:--:\n--:g' | grep -wA1 "$FLAG" | sed "s:${UNESCAPED_FLAG}::g;s:-:\n-:g" | head -n1 | xargs
+		else
+			echo "$TRUEVAL"
 		fi
 	}
 
 	function getGameScopeGeneralOpts {
-		# GameScope Show Resolution (corresponds to -W, -H options, uppercase) -- Actual GameScope window size -- Dropdown
-		if [ -z "$GSSHWRES" ]; then
-			if ! grep -qw "\-w" <<< "$GAMESCOPE_ARGS" || ! grep -qw "\-h" <<< "$GAMESCOPE_ARGS"; then
-				GSSHWRES="1280x720"
-			else
-				GSSHWRES="$(tr ' ' '\n' <<< "$GAMESCOPE_ARGS" | grep -wA1 "\-W" | tail -n1)x$(tr ' ' '\n' <<< "$GAMESCOPE_ARGS" | grep -wA1 "\-H" | tail -n1)"
-			fi
-		fi
+		# GameScope Show Resolution (corresponds to -W, -H options, uppercase) -- Actual GameScope window size (defaults to 1280x720) -- Dropdown
+		# Although this is a combobox, we still use "num" as the `getGameScopeArg` type because we want numeric validation
+		GSSHOWRESARGWIDTH="$( getGameScopeArg "$GAMESCOPE_ARGS" "-W" "$GSSHOWRESARGWIDTH" "" "1280" "num")"
+		GSSHOWRESARGHEIGHT="$( getGameScopeArg "$GAMESCOPE_ARGS" "-H" "$GSSHOWRESARGHEIGHT" "" "720" "num")"
 
-		# GameScope Internal Resolution (corresponds to -w, -h options, lowercase) -- Resolution that games see -- Dropdown
-		if [ -z "$GSINTRES" ]; then
-			if ! grep -qw "\-w" <<< "$GAMESCOPE_ARGS" || ! grep -qw "\-h" <<< "$GAMESCOPE_ARGS"; then
-				GSINTRES="1280x720"
-			else
-				GSINTRES="$(tr ' ' '\n' <<< "$GAMESCOPE_ARGS" | grep -wA1 "\-w" | tail -n1)x$(tr ' ' '\n' <<< "$GAMESCOPE_ARGS" | grep -wA1 "\-h" | tail -n1)"
-			fi
-		fi
+		GSSHWRES="${GSSHOWRESARGWIDTH}x${GSSHOWRESARGHEIGHT}"
+
+		# GameScope Internal Resolution (corresponds to -w, -h options, lowercase) -- Resolution that games see (defaults to 1280x720) -- Dropdown
+		# Although this is a combobox, we still use "num" as the `getGameScopeArg` type because we want numeric validation
+		GSINTRESARGWIDTH="$( getGameScopeArg "$GAMESCOPE_ARGS" "-w" "$GSINTRESARGWIDTH" "" "1280" "num")"
+		GSINTRESARGHEIGHT="$( getGameScopeArg "$GAMESCOPE_ARGS" "-h" "$GSINTRESARGHEIGHT" "" "720" "num")"
+
+		GSINTRES="${GSINTRESARGWIDTH}x${GSINTRESARGHEIGHT}"
 
 		# Default internal resolution to $NON ('none') if blank -- Ensures we don't pass invalid resolution to GameScope
 		if [ -z "$GSINTRES" ]; then  GSINTRES="$NON"; fi
@@ -11556,6 +11586,9 @@ function setGameScopeVars {
 		GSSTATSPATH="$( getGameScopeArg "$GAMESCOPE_ARGS" "--stats-path" "$GSSTATSPATH" "" "" "path" )"
 		if [ -n "$GSSTATSPATH" ]; then  GSSTATSPATHENABLE="1"; fi
 
+		# Backend for GameScope to use (--backend) -- Dropdown
+		GSBACKEND="$( getGameScopeArg "$GAMESCOPE_ARGS" "--backend" "$GSBACKEND" "" "auto" "cb" )"
+
 		# Amount of time in milliseconds to wait before hiding the cursor (-C) -- Spinner
 		GSHIDECURSORDELAY="$( getGameScopeArg "$GAMESCOPE_ARGS" "-C" "$GSHIDECURSORDELAY" "" "0" "num" )"
 
@@ -11600,6 +11633,7 @@ function setGameScopeVars {
 	GSTOUCHMODES="${GSDEF}!${GSHOVER}!${GSLEFTCLICK}!${GSRIGHTCLICK}!${GSMIDDLECLICK}!${GSPASSTHRU}" # Corresponds to 0,1,2,3,4 respectively internally by GameScope -- Default is ingored and the flag is not passed to GameScope
 	GSDRMMODES="${GSDEF}!cvt!fixed"
 	GSNEWFILTERMODE=0  # Whether gamescope uses -U/-Y/-n/-i (legacy) or -F/-S (new)
+	GSBACKENDOPTS="auto!sdl!wayland!drm!headless!openvr"
 
 	# Get values for UI elements based on existing GameScope args
 	getGameScopeGeneralOpts
@@ -11683,6 +11717,7 @@ function GameScopeGui {
 			--field="$GUI_GSPREFOUT!$DESC_GSPREFOUT ('GSPREFOUT')" "" \
 			--field="$GUI_GSDRMMODE!$DESC_GSDRMMODE ('GSDRMMODE')":CB "$(cleanDropDown "${GSDRMMODE}" "${GSDRMMODES}")" \
 			--field="$(spanFont "$GUI_GSADVOPTIONS" "H")":LBL "SKIP" \
+			--field="$GUI_GSBACKEND!$DESC_GSBACKEND ('GSBACKEND')":CBE "$(cleanDropDown "${GSBACKEND}" "${GSBACKENDOPTS}")" \
 			--field="$GUI_GSSTATSPATHENABLE!$DESC_GSSTATSPATHENABLE ('GSSTATSPATHENABLE')":CHK "$GSSTATSPATHENABLE" \
 			--field="$GUI_GSSTATSPATH!$DESC_GSSTATSPATH ('GSSTATSPATH')":DIR "${GSSTATSPATH//\"}" \
 			--field="$GUI_GSHIDECURSORDELAY!$DESC_GSHIDECURSORDELAY ('GSHIDECURSORDELAY')":NUM "${GSHIDECURSORDELAY/#-/ -}" \
@@ -11785,34 +11820,41 @@ function GameScopeGui {
 						GSPREFOUT="${GSARR[$GSEMBEDDEDHEADING + 4]}"
 						GSDRMMODE="${GSARR[$GSEMBEDDEDHEADING + 5]}"
 						# GSARR[49] is the Advanced heading
-						GSSTATSPATHENABLE="${GSARR[$GSADVANCEDHEADING + 1]}"
-						GSSTATSPATH="${GSARR[$GSADVANCEDHEADING + 2]}"
-						GSHIDECURSORDELAY="${GSARR[$GSADVANCEDHEADING + 3]}"
-						GSFORCECOMP="${GSARR[$GSADVANCEDHEADING + 4]}"
-						GSDEBUGHUD="${GSARR[$GSADVANCEDHEADING + 5]}"
-						GSFORCEHDRSUPPORT="${GSARR[$GSADVANCEDHEADING + 6]}"
-						GSFORCEHDROUTPUT="${GSARR[$GSADVANCEDHEADING + 7]}"
-						GSPREFERVKDEVICE="${GSARR[$GSADVANCEDHEADING + 8]}"
-						GSWAYLAND="${GSARR[$GSADVANCEDHEADING + 9]}"
-						GSRT="${GSARR[$GSADVANCEDHEADING + 10]}"
-						GSHDLS="${GSARR[$GSADVANCEDHEADING + 11]}"
-						USEGAMESCOPEWSI="${GSARR[$GSADVANCEDHEADING + 12]}"
+						GSBACKEND="${GSARR[$GSADVANCEDHEADING + 1]}"
+						GSSTATSPATHENABLE="${GSARR[$GSADVANCEDHEADING + 2]}"
+						GSSTATSPATH="${GSARR[$GSADVANCEDHEADING + 3]}"
+						GSHIDECURSORDELAY="${GSARR[$GSADVANCEDHEADING + 4]}"
+						GSFORCECOMP="${GSARR[$GSADVANCEDHEADING + 5]}"
+						GSDEBUGHUD="${GSARR[$GSADVANCEDHEADING + 6]}"
+						GSFORCEHDRSUPPORT="${GSARR[$GSADVANCEDHEADING + 7]}"
+						GSFORCEHDROUTPUT="${GSARR[$GSADVANCEDHEADING + 8]}"
+						GSPREFERVKDEVICE="${GSARR[$GSADVANCEDHEADING + 9]}"
+						GSWAYLAND="${GSARR[$GSADVANCEDHEADING + 10]}"
+						GSRT="${GSARR[$GSADVANCEDHEADING + 11]}"
+						GSHDLS="${GSARR[$GSADVANCEDHEADING + 12]}"
+						USEGAMESCOPEWSI="${GSARR[$GSADVANCEDHEADING + 13]}"
 
 						# Build the GameScope arguments string
 						unset GAMESCOPE_ARGS
+						GAMESCOPE_ARGS=""
+						
+						# Internal width/height (-w, -h) broken out from string like '1280x720'
+						# NOTE: In future if `GSINTW` is blank but `GSINTH` is set, we could calculate a corresponding 16:9 width like GameScope does
 						GSINTW1="${GSINTRES%x*}"
 						GSINTW="${GSINTW1%%-*}"
 						GSINTH1="${GSINTRES#*x}"
 						GSINTH="${GSINTH1%%-*}"
-						GAMESCOPE_ARGS="-w ${GSINTW} -h ${GSINTH}"
 
+						# Show width/height (-W, -H) broken out from string like '1280x720'
+						# NOTE: In future if `GSINTW` is blank but `GSINTH` is set, we could calculate a corresponding 16:9 width like GameScope does
 						GSSHWW1="${GSSHWRES%x*}"
 						GSSHWW="${GSSHWW1%%-*}"
 						GSSHWH1="${GSSHWRES#*x}"
 						GSSHWH="${GSSHWH1%%-*}"
-						GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -W ${GSSHWW} -H ${GSSHWH}"
 
 						### GENERAL OPTIONS ###
+						if [ -n "$GSINTW" ] && [ -n "$GSINTH" ]                         ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -w ${GSINTW} -h ${GSINTH}"; fi
+						if [ -n "$GSSHWW" ] && [ -n "$GSSHWH" ]                         ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -W ${GSSHWW} -H ${GSSHWH}"; fi
 						if [ "$GSFLR" -eq "$GSFLR" ] 2>/dev/null                        ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -r ${GSFLR}"; fi
 						if [ "$GSFLU" -eq "$GSFLU" ] 2>/dev/null                        ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -o ${GSFLU}"; fi
 						if [ "$GSFS" == "TRUE" ]                                        ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -f"; fi
@@ -11941,6 +11983,7 @@ function GameScopeGui {
 						# EMBEDDED OPTIONS END
 
 						## ADVANCED OPTIONS ###
+						if [ ! "$GSBACKEND" == "auto" ]                                 ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --backend ${GSBACKEND}"; fi  # Don't pass GameScope Backend if left at "auto"; GameScope defaults to this anyway
 						if [ ! "$GSDRMMODE" == "${GSDEF}" ] && [ -n "$GSDRMMODE" ]      ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --generate-drm-mode ${GSDRMMODE}"; fi  # Don't pass DRM mode if "default"
 						if [ -d "$GSSTATSPATH" ] && [ "$GSSTATSPATHENABLE" == "TRUE" ]  ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --stats-path '${GSSTATSPATH}'"; fi
 						if [ ! "$GSHIDECURSORDELAY" == "0" ]                            ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} -C ${GSHIDECURSORDELAY}"; fi  # Ignore cursor delay if it's 0
@@ -11954,7 +11997,8 @@ function GameScopeGui {
 						if [ "$GSHDLS" == "TRUE" ]                                      ; then  GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --headless"; fi
 						### ADVANCED OPTIONS END ###
 
-						GAMESCOPE_ARGS="${GAMESCOPE_ARGS} --"
+						# Remove trailing whitespace and append '--'
+						GAMESCOPE_ARGS="${GAMESCOPE_ARGS# } --"
 
 						writelog "INFO" "${FUNCNAME[0]} - Saving configured GAMESCOPE_ARGS '$GAMESCOPE_ARGS' into '$STLGAMECFG'"
 						touch "$FUPDATE"
@@ -12932,7 +12976,7 @@ function launchCustomProg {
 					writelog "INFO" "${FUNCNAME[0]} - FORK_CUSTOMCMD is set to 1 - forking the custom program in background and continue"
 					extProtonRun "FC" "$LACO" "$CUSTOMCMD_ARGS" "" "${CUSTOMCMD_USESLR}"
 				elif [ "$ONLY_CUSTOMCMD" -eq 1 ] && [ -n "${FINALOUTCMD[*]}" ]; then
-					writelog "INFO" "${FUNCNAME[0]} - ONLY_CUSTOMCMD is set to 1 and we have some arguments in FINALOUTCMD - passing to extProtonRun to build a valid start command"	
+					writelog "INFO" "${FUNCNAME[0]} - ONLY_CUSTOMCMD is set to 1 and we have some arguments in FINALOUTCMD - passing to extProtonRun to build a valid start command"
 					extProtonRun "R" "$LACO" "$CUSTOMCMD_ARGS" "$FINALOUTCMD" "${CUSTOMCMD_USESLR}"  # extProtonRun will handle adding the FINALOUTCMD args to
 				else
 					extProtonRun "RC" "$LACO" "$CUSTOMCMD_ARGS" "" "${CUSTOMCMD_USESLR}"
@@ -12978,7 +13022,7 @@ function launchCustomProg {
 
 				writelog "INFO" "${FUNCNAME[0]} - Steam Linux Runtime enabled, attempting to fetch Steam Linux Runtime for native Custom Command"
 				# "2" is the FORCESLRTYPE, meaning we want to force to get the native SLR -- We do this in case we are trying to launch a native custom command with a Proton title
-				# In this case, setSLRReap is going to have the Proton SLR vars set from the game launch, so we need to force it here to use the native SLR 
+				# In this case, setSLRReap is going to have the Proton SLR vars set from the game launch, so we need to force it here to use the native SLR
 				setNonGameSLRReap "2"
 			fi
 
@@ -17820,7 +17864,7 @@ function prepareMO2 {
 }
 
 function createMO2SilentModeExeProfilesList {
-	# Get all of the ModOrganizer 2 executables launch configurations in the instance's INI 
+	# Get all of the ModOrganizer 2 executables launch configurations in the instance's INI
 	# The user can use this to override which 'moshortcut://' is launched in Silent Mode
 	MO2SILENTMODEEXEPROFILES="$NON"
 	MO2GAMES="$GLOBALMISCDIR/mo2games.txt"
@@ -20269,7 +20313,7 @@ function startGame {
 		writelog "INFO" "${FUNCNAME[0]} - ## STL LAUNCH COMMAND: '${RUNCMD[*]}'"
 		writelog "INFO" "${FUNCNAME[0]} - ## GAMESTART HERE ###"
 
-		restoreOrgVars # restore original LC_ and friends for the game
+		restoreOrgVars
 
 		GRUNLOG="$STLGLLOGDIRID/${AID}.log"
 		if [ "$ISORIGIN" -eq 1 ]; then
@@ -22172,15 +22216,17 @@ function CompatTool {
 	elif [ "$1" == "del" ]; then
 		if [ ! -d "$SCTS" ]; then
 			writelog "SKIP" "${FUNCNAME[0]} - Selected '$1' but '$SCTS' doesn't exist"
+			return
+		fi
+
+		rm "$SCTS/$PROGCMD" 2>/dev/null
+		# *.vdf is usually 'compatibilitytool.vdf', *.txt is usually 'VERSION.txt' created by ProtonUp-Qt
+		find "$SCTS" -maxdepth 1 -type f \( -name "*.vdf" -o -name "*.txt" \) -exec rm {} \;
+		rmdir "$SCTS"
+		if [ ! -d "$SCTS" ]; then
+			writelog "INFO" "${FUNCNAME[0]} - Removed '$SCTS' successfully" "E"
 		else
-			rm "$SCTS/$PROGCMD" 2>/dev/null
-			find "$SCTS" -maxdepth 1 -type f -name "*.vdf" -exec rm {} \;
-			rmdir "$SCTS"
-			if [ ! -d "$SCTS" ]; then
-				writelog "INFO" "${FUNCNAME[0]} - Removed '$SCTS' successfully" "E"
-			else
-				writelog "SKIP" "${FUNCNAME[0]} - Tried to carefully remove '$SCTS', but it still exists - any files inside '$SCTS'?" "E"
-			fi
+			writelog "SKIP" "${FUNCNAME[0]} - Tried to carefully remove '$SCTS', but it still exists - any files inside '$SCTS'?" "E"
 		fi
 	else
 		if [ ! -d "$SCTS" ]; then
@@ -25292,13 +25338,19 @@ function closeSTL {
 # main:#################
 
 function saveOrgVars {
+	# TODO resolve the unused warnings by dynamically assigning the variables like we do in 'restoreOrgVars'
+
 	writelog "INFO" "${FUNCNAME[0]} - Storing some original variables to restore them later" "P"
 
 	env | grep "=" | sort -o "$VARSIN"
 
+	# shellcheck disable=2034
 	ORG_LD_PRELOAD="$LD_PRELOAD"
+	# shellcheck disable=2034
 	ORG_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+	# shellcheck disable=2034
 	ORG_LC_ALL="$LC_ALL"
+	# shellcheck disable=2034
 	ORG_PATH="$PATH"
 }
 
@@ -25382,11 +25434,23 @@ function unsetSTLvars {
 }
 
 function restoreOrgVars {
-	writelog "INFO" "${FUNCNAME[0]} - Restoring previously cleared Variables"
-	LD_PRELOAD="$ORG_LD_PRELOAD"
-	LD_LIBRARY_PATH="$ORG_LD_LIBRARY_PATH"
-	LC_ALL="$ORG_LC_ALL"
-	PATH="$ORG_PATH"
+	writelog "INFO" "${FUNCNAME[0]} - Restoring previously cleared environment variables"
+
+	STLRESTOREVARS=( "LD_PRELOAD" "LD_LIBRARY_PATH" "LC_ALL" "PATH" )
+	for RESTOREVAR in "${STLRESTOREVARS[@]}"; do
+
+		# e.g. 'ORG_LD_PRELOAD' for 'LD_PRELOAD' on first iteration of the loop
+		BUILTORGVARNAME="\$ORG_${RESTOREVAR}"
+
+		# Check if the envvar has been defined in a custom-vars conf file, if so don't restore it and continue
+		if grep -q "^${RESTOREVAR}" "$GLOBCUSTVARS" || grep -q "^${RESTOREVAR}" "$GAMECUSTVARS"; then
+			writelog "WARN" "${FUNCNAME[0]} - Not restoring '${RESTOREVAR}' to original value as it is defined in a custom-vars conf file. This may potentially cause issues."
+
+			continue
+		fi
+
+		eval "${RESTOREVAR}=\"${BUILTORGVARNAME}\""
+	done
 }
 
 function rmOldLog {
@@ -26878,7 +26942,6 @@ function setflatpak {
 	if [ -n "$FLATPAK_ID" ] && [ "$FLATPAK_ID" == "com.valvesoftware.Steam" ]; then
 		writelog "INFO" "${FUNCNAME[0]} - seems like flatpak is used, because variable 'FLATPAK_ID' exists and points to 'com.valvesoftware.Steam'"
 		INFLATPAK=1
-		CompatTool "add" "$FPBIN/$PROGCMD"
 	else
 		writelog "INFO" "${FUNCNAME[0]} - started $PROGNAME from ${0}"
 	fi
